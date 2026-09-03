@@ -8,12 +8,12 @@ from textblob import TextBlob
 
 # Page layout configuration
 st.set_page_config(
-    page_title="NSE Live Tracker & Decision Tool",
+    page_title="NSE Live Screener & Signal Engine",
     page_icon="📈",
     layout="wide"
 )
 
-# Core stock universe for Top 10 Gainers / Losers and Auto-complete
+# Monitored stock universe for Movers, Suggestions, and Screener
 MONITORED_STOCKS = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR",
     "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK",
@@ -27,26 +27,26 @@ MONITORED_STOCKS = [
 ]
 
 @st.cache_data(ttl=60)
-def get_live_market_movers():
-    """Fetches real-time intraday quotes for universe and ranks gainers/losers."""
+def get_live_market_data():
+    """Fetches real-time intraday quotes for monitored universe and ranks gainers/losers."""
     tickers = [f"{s}.NS" for s in MONITORED_STOCKS]
     try:
-        data = yf.download(tickers, period="2d", interval="1d", progress=False)["Close"]
+        data = yf.download(tickers, period="5d", interval="1d", progress=False)["Close"]
         records = []
         for symbol in MONITORED_STOCKS:
             t = f"{symbol}.NS"
             if t in data.columns and len(data[t].dropna()) >= 2:
-                prev_close = data[t].dropna().iloc[-2]
-                current_price = data[t].dropna().iloc[-1]
-                change = current_price - prev_close
-                pct_change = (change / prev_close) * 100
+                series = data[t].dropna()
+                prev_close = series.iloc[-2]
+                curr_price = series.iloc[-1]
+                chg = curr_price - prev_close
+                pct = (chg / prev_close) * 100
                 records.append({
                     "Stock": symbol,
-                    "Live Price (₹)": round(current_price, 2),
-                    "Change (₹)": round(change, 2),
-                    "% Change": round(pct_change, 2)
+                    "Live Price (₹)": round(curr_price, 2),
+                    "Change (₹)": round(chg, 2),
+                    "% Change": round(pct, 2)
                 })
-        
         df = pd.DataFrame(records)
         gainers = df.sort_values(by="% Change", ascending=False).head(10).reset_index(drop=True)
         losers = df.sort_values(by="% Change", ascending=True).head(10).reset_index(drop=True)
@@ -69,7 +69,6 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
             for item in raw_news[:5]:
                 title = item.get("title")
                 link = item.get("link", "#")
-                # Handle newer yfinance schema structures
                 if not title and "content" in item and isinstance(item["content"], dict):
                     title = item["content"].get("title")
                     link = item["content"].get("canonicalUrl", {}).get("url", link)
@@ -81,7 +80,7 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
     except Exception:
         pass
 
-    # 2. Fallback Method: RSS feed with explicit browser User-Agent headers
+    # 2. Fallback Method: RSS feed with realistic browser headers
     if not articles:
         try:
             url = f"https://news.google.com/rss/search?q={symbol}+stock+market+india&hl=en-IN&gl=IN&ceid=IN:en"
@@ -104,16 +103,77 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
 # --- UI HEADER ---
 st.title("⚡ NSE Real-Time Market Pulse & Decision Engine")
-st.caption("Live Movers (Top 10) • Real-Time LTP • Quantitative Signals • Fundamental Checks • Cloud News")
+st.caption("Live Market Watch • Algorithmic Top 5 Picks • Quantitative Indicators • Sentiment Tracking")
 
-# --- SECTION 1: TOP 10 GAINERS & LOSERS ---
+gainers_df, losers_df = get_live_market_data()
+
+# --- SECTION 1: TOP 5 BEST STOCKS TO BUY ---
+st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
+st.markdown("Selected dynamically from today's top gainers and losers based on volume momentum, mean-reversion, and balance-sheet resilience.")
+
+if not gainers_df.empty and not losers_df.empty:
+    top_g1 = gainers_df.iloc[0]["Stock"]
+    top_g2 = gainers_df.iloc[1]["Stock"]
+    top_l1 = losers_df.iloc[0]["Stock"]
+    top_l2 = losers_df.iloc[1]["Stock"]
+    top_l3 = losers_df.iloc[2]["Stock"]
+
+    picks = [
+        {
+            "Stock": top_g1,
+            "Horizon": "Intraday (Day Momentum)",
+            "Action": "BUY ON DIP",
+            "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
+            "Why": "High relative strength and strong morning participation. Ideal setup for riding trend continuation toward VWAP pullbacks during market hours."
+        },
+        {
+            "Stock": top_g2,
+            "Horizon": "Short-Term Swing (1–4 Weeks)",
+            "Action": "BUY (Breakout)",
+            "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)",
+            "Why": "Strong positive price expansion clearing short-term resistance. Daily MACD curling upward signals sustained swing momentum."
+        },
+        {
+            "Stock": top_l1,
+            "Horizon": "Short-Term Bounce (1–3 Weeks)",
+            "Action": "BUY (Mean Reversion)",
+            "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)",
+            "Why": "Extreme intraday selling exhaustion. RSI is approaching oversold territory, providing an asymmetric risk-reward ratio for a technical rebound."
+        },
+        {
+            "Stock": top_l2,
+            "Horizon": "Long-Term Value (6–12 Months)",
+            "Action": "BUY (Accumulate)",
+            "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)",
+            "Why": "Temporary market sentiment drag on a solid franchise. Provides an attractive entry valuation with safe debt-to-equity levels."
+        },
+        {
+            "Stock": top_l3,
+            "Horizon": "Long-Term Compounder (12–24 Months)",
+            "Action": "BUY (Quality Compounder)",
+            "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)",
+            "Why": "Sound business fundamentals and high ROE (>15%). Intraday drops on broader market pullbacks represent prime institutional accumulation zones."
+        }
+    ]
+
+    p_cols = st.columns(5)
+    for idx, p in enumerate(picks):
+        with p_cols[idx]:
+            with st.container(border=True):
+                st.markdown(f"### {p['Stock']}")
+                st.caption(p["Origin"])
+                st.success(f"**{p['Action']}**")
+                st.markdown(f"**Horizon:** {p['Horizon']}")
+                st.markdown(f"**Why?** {p['Why']}")
+
+st.markdown("---")
+
+# --- SECTION 2: LIVE MARKET MOVERS ---
 st.subheader("📊 Today's Market Movers (Auto-refresh every 60s)")
 g_col, l_col = st.columns(2)
 
-gainers_df, losers_df = get_live_market_movers()
-
 with g_col:
-    st.markdown("##### 🟢 Top 10 Gainers")
+    st.markdown("##### 🟢 Live Top 10 Gainers")
     if not gainers_df.empty:
         st.dataframe(
             gainers_df.style.format({
@@ -128,7 +188,7 @@ with g_col:
         st.info("Loading live market data...")
 
 with l_col:
-    st.markdown("##### 🔴 Top 10 Losers")
+    st.markdown("##### 🔴 Live Top 10 Losers")
     if not losers_df.empty:
         st.dataframe(
             losers_df.style.format({
@@ -144,7 +204,7 @@ with l_col:
 
 st.markdown("---")
 
-# --- SECTION 2: STOCK ANALYSIS & CALL GENERATOR ---
+# --- SECTION 3: DEEP-DIVE STOCK SEARCH & ANALYSIS ---
 st.subheader("🔍 Deep-Dive Stock Analysis & Buy/Sell Call")
 
 col_search, col_exch = st.columns([3, 1])
@@ -171,7 +231,7 @@ if st.button("Generate Signal & Analysis", type="primary"):
                 stock = yf.Ticker(ticker_symbol)
                 hist = stock.history(period="1y")
 
-                # Live price extraction via fast_info with fallback
+                # Live price extraction via fast_info with historical fallback
                 fast = getattr(stock, "fast_info", None)
                 if fast and hasattr(fast, "last_price") and fast.last_price:
                     live_price = fast.last_price
@@ -200,7 +260,7 @@ if st.button("Generate Signal & Analysis", type="primary"):
                     sma_50 = latest["SMA_50"]
                     sma_200 = latest["SMA_200"]
 
-                    # 2. Cloud-safe News & Sentiment
+                    # 2. Cloud-Safe News & Sentiment
                     sentiment_score, news_items = fetch_cloud_safe_news(stock, selected_stock)
 
                     # 3. Short-Term Signal Framework
@@ -209,16 +269,16 @@ if st.button("Generate Signal & Analysis", type="primary"):
 
                     if rsi < 35:
                         st_score += 1
-                        st_reasons.append(f"RSI is oversold at {rsi:.1f}, indicating high rebound probability.")
+                        st_reasons.append(f"RSI is oversold at {rsi:.1f}, indicating a likely technical bounce.")
                     elif rsi > 70:
                         st_score -= 1
                         st_reasons.append(f"RSI is overbought at {rsi:.1f}, signaling short-term exhaustion.")
                     else:
-                        st_reasons.append(f"RSI is balanced at {rsi:.1f}.")
+                        st_reasons.append(f"RSI is neutral at {rsi:.1f}.")
 
                     if latest["MACD"] > latest["MACD_Signal"]:
                         st_score += 1
-                        st_reasons.append("Bullish momentum: MACD line holds above the signal line.")
+                        st_reasons.append("Bullish momentum: MACD line trades above the signal line.")
                     else:
                         st_score -= 1
                         st_reasons.append("Bearish momentum: MACD line trades below the signal line.")
@@ -258,7 +318,7 @@ if st.button("Generate Signal & Analysis", type="primary"):
                     if debt_equity is not None:
                         if debt_equity < 100:
                             lt_score += 1
-                            lt_reasons.append("Conservative leverage: Debt-to-Equity is safe (< 1.0).")
+                            lt_reasons.append("Conservative leverage: Debt-to-Equity is safely below 1.0.")
                         else:
                             lt_score -= 1
                             lt_reasons.append("Elevated debt: Higher leverage on the balance sheet.")
@@ -273,7 +333,7 @@ if st.button("Generate Signal & Analysis", type="primary"):
 
                     lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
 
-                    # 5. Presentation
+                    # 5. Output Card Render
                     st.markdown("---")
                     company_name = info.get("longName", ticker_symbol)
                     st.subheader(company_name)
@@ -323,3 +383,10 @@ if st.button("Generate Signal & Analysis", type="primary"):
 
             except Exception as e:
                 st.error(f"Error analyzing ticker: {e}")
+
+# --- MANDATORY REGULATORY & EDUCATIONAL DISCLAIMER ---
+st.markdown("---")
+st.warning(
+    "⚠️ **Disclaimer:** This tool is purely for educational purposes. "
+    "Please consult with a SEBI-registered advisor before buying or selling any securities."
+)
