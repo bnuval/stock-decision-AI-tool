@@ -3,11 +3,17 @@ import yfinance as yf
 import pandas as pd
 import ta
 import feedparser
+import requests
 from textblob import TextBlob
 
-st.set_page_config(page_title="NSE Live Tracker & Advisor", layout="wide")
+# Page layout configuration
+st.set_page_config(
+    page_title="NSE Live Tracker & Decision Tool",
+    page_icon="📈",
+    layout="wide"
+)
 
-# Universe of top liquid NSE stocks
+# Core stock universe for Top 10 Gainers / Losers and Auto-complete
 MONITORED_STOCKS = [
     "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR",
     "ITC", "SBIN", "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK",
@@ -20,14 +26,12 @@ MONITORED_STOCKS = [
     "INDUSINDBK", "NESTLEIND", "GRASIM", "HEROMOTOCO", "EICHERMOT"
 ]
 
-@st.cache_data(ttl=60)  # Auto-refreshes data every 60 seconds
+@st.cache_data(ttl=60)
 def get_live_market_movers():
-    """Fetches real-time intraday quotes for monitored stocks and sorts gainers/losers."""
+    """Fetches real-time intraday quotes for universe and ranks gainers/losers."""
     tickers = [f"{s}.NS" for s in MONITORED_STOCKS]
     try:
-        # Download 2-day 1-minute/daily data in bulk for fast speed
         data = yf.download(tickers, period="2d", interval="1d", progress=False)["Close"]
-        
         records = []
         for symbol in MONITORED_STOCKS:
             t = f"{symbol}.NS"
@@ -47,28 +51,60 @@ def get_live_market_movers():
         gainers = df.sort_values(by="% Change", ascending=False).head(10).reset_index(drop=True)
         losers = df.sort_values(by="% Change", ascending=True).head(10).reset_index(drop=True)
         return gainers, losers
-    except Exception as e:
+    except Exception:
         return pd.DataFrame(), pd.DataFrame()
 
-def fetch_news_sentiment(symbol):
-    """Parses Google News RSS feed for the stock."""
-    url = f"https://news.google.com/rss/search?q={symbol}+stock+market+india&hl=en-IN&gl=IN&ceid=IN:en"
-    feed = feedparser.parse(url)
-    
+def fetch_cloud_safe_news(ticker_obj, symbol):
+    """
+    Fetches news using yfinance built-in feed first.
+    Falls back to Google News RSS with browser User-Agent to prevent 403 blocks in the cloud.
+    """
     articles = []
     total_polarity = 0
-    for entry in feed.entries[:5]:
-        title = entry.title
-        score = TextBlob(title).sentiment.polarity
-        total_polarity += score
-        articles.append({"title": title, "link": entry.link, "score": score})
-        
+
+    # 1. Primary Method: yfinance news API
+    try:
+        raw_news = getattr(ticker_obj, "news", [])
+        if raw_news:
+            for item in raw_news[:5]:
+                title = item.get("title")
+                link = item.get("link", "#")
+                # Handle newer yfinance schema structures
+                if not title and "content" in item and isinstance(item["content"], dict):
+                    title = item["content"].get("title")
+                    link = item["content"].get("canonicalUrl", {}).get("url", link)
+
+                if title:
+                    score = TextBlob(title).sentiment.polarity
+                    total_polarity += score
+                    articles.append({"title": title, "link": link, "score": score})
+    except Exception:
+        pass
+
+    # 2. Fallback Method: RSS feed with explicit browser User-Agent headers
+    if not articles:
+        try:
+            url = f"https://news.google.com/rss/search?q={symbol}+stock+market+india&hl=en-IN&gl=IN&ceid=IN:en"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            resp = requests.get(url, headers=headers, timeout=5)
+            feed = feedparser.parse(resp.content)
+            for entry in feed.entries[:5]:
+                title = entry.title
+                score = TextBlob(title).sentiment.polarity
+                total_polarity += score
+                articles.append({"title": title, "link": entry.link, "score": score})
+        except Exception:
+            pass
+
     avg_score = (total_polarity / len(articles)) if articles else 0
     return avg_score, articles
 
+
 # --- UI HEADER ---
 st.title("⚡ NSE Real-Time Market Pulse & Decision Engine")
-st.caption("Live Market Movers • Intraday Prices • Technicals • Fundamentals • Sentiment")
+st.caption("Live Movers (Top 10) • Real-Time LTP • Quantitative Signals • Fundamental Checks • Cloud News")
 
 # --- SECTION 1: TOP 10 GAINERS & LOSERS ---
 st.subheader("📊 Today's Market Movers (Auto-refresh every 60s)")
@@ -79,42 +115,48 @@ gainers_df, losers_df = get_live_market_movers()
 with g_col:
     st.markdown("##### 🟢 Top 10 Gainers")
     if not gainers_df.empty:
-        # Style dataframe with green highlight
         st.dataframe(
-            gainers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "+{:.2f}", "% Change": "+{:.2f}%"}),
+            gainers_df.style.format({
+                "Live Price (₹)": "₹{:.2f}",
+                "Change (₹)": "+{:.2f}",
+                "% Change": "+{:.2f}%"
+            }),
             use_container_width=True,
             hide_index=True
         )
     else:
-        st.info("Fetching live data...")
+        st.info("Loading live market data...")
 
 with l_col:
     st.markdown("##### 🔴 Top 10 Losers")
     if not losers_df.empty:
-        # Style dataframe with red highlight
         st.dataframe(
-            losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}),
+            losers_df.style.format({
+                "Live Price (₹)": "₹{:.2f}",
+                "Change (₹)": "{:.2f}",
+                "% Change": "{:.2f}%"
+            }),
             use_container_width=True,
             hide_index=True
         )
     else:
-        st.info("Fetching live data...")
+        st.info("Loading live market data...")
 
 st.markdown("---")
 
 # --- SECTION 2: STOCK ANALYSIS & CALL GENERATOR ---
 st.subheader("🔍 Deep-Dive Stock Analysis & Buy/Sell Call")
 
-c1, c2 = st.columns([3, 1])
-with c1:
+col_search, col_exch = st.columns([3, 1])
+with col_search:
     selected_stock = st.selectbox(
-        "Type or select stock symbol:",
+        "Type or select stock symbol (e.g., RELIANCE, TATAMOTORS, HDFCBANK):",
         options=sorted(MONITORED_STOCKS),
         index=None,
-        placeholder="Start typing stock name (e.g., RELIANCE, TATAMOTORS, HDFCBANK)...",
+        placeholder="Start typing stock name...",
         accept_new_options=True
     )
-with c2:
+with col_exch:
     exchange = st.selectbox("Exchange:", ["NSE (.NS)", "BSE (.BO)"])
 
 suffix = ".NS" if "NSE" in exchange else ".BO"
@@ -124,12 +166,12 @@ if st.button("Generate Signal & Analysis", type="primary"):
         st.warning("Please select or enter a stock ticker first.")
     else:
         ticker_symbol = selected_stock.strip().upper() + suffix
-        with st.spinner(f"Fetching real-time order data and fundamentals for {ticker_symbol}..."):
+        with st.spinner(f"Retrieving order books, technicals, and news for {ticker_symbol}..."):
             try:
                 stock = yf.Ticker(ticker_symbol)
                 hist = stock.history(period="1y")
-                
-                # Retrieve real-time quote via fast_info
+
+                # Live price extraction via fast_info with fallback
                 fast = getattr(stock, "fast_info", None)
                 if fast and hasattr(fast, "last_price") and fast.last_price:
                     live_price = fast.last_price
@@ -140,13 +182,12 @@ if st.button("Generate Signal & Analysis", type="primary"):
 
                 day_change = live_price - prev_close
                 day_pct = (day_change / prev_close) * 100
-
                 info = stock.info
 
                 if hist.empty or len(hist) < 50:
-                    st.error("Insufficient market history to generate technical indicators.")
+                    st.error("Insufficient market history for this ticker to calculate technical metrics.")
                 else:
-                    # 1. Technicals Calculation
+                    # 1. Technical Indicators
                     hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
                     hist["SMA_50"] = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator()
                     hist["SMA_200"] = ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator()
@@ -159,46 +200,48 @@ if st.button("Generate Signal & Analysis", type="primary"):
                     sma_50 = latest["SMA_50"]
                     sma_200 = latest["SMA_200"]
 
-                    # 2. News Sentiment
-                    sentiment_score, news_items = fetch_news_sentiment(selected_stock)
+                    # 2. Cloud-safe News & Sentiment
+                    sentiment_score, news_items = fetch_cloud_safe_news(stock, selected_stock)
 
-                    # 3. Short-Term Logic
+                    # 3. Short-Term Signal Framework
                     st_score = 0
                     st_reasons = []
 
                     if rsi < 35:
                         st_score += 1
-                        st_reasons.append(f"RSI oversold ({rsi:.1f}), strong bounce likelihood.")
+                        st_reasons.append(f"RSI is oversold at {rsi:.1f}, indicating high rebound probability.")
                     elif rsi > 70:
                         st_score -= 1
-                        st_reasons.append(f"RSI overbought ({rsi:.1f}), pullback risk.")
+                        st_reasons.append(f"RSI is overbought at {rsi:.1f}, signaling short-term exhaustion.")
                     else:
-                        st_reasons.append(f"RSI is neutral ({rsi:.1f}).")
+                        st_reasons.append(f"RSI is balanced at {rsi:.1f}.")
 
                     if latest["MACD"] > latest["MACD_Signal"]:
                         st_score += 1
-                        st_reasons.append("MACD is positive above signal line (bullish momentum).")
+                        st_reasons.append("Bullish momentum: MACD line holds above the signal line.")
                     else:
                         st_score -= 1
-                        st_reasons.append("MACD is below signal line (bearish momentum).")
+                        st_reasons.append("Bearish momentum: MACD line trades below the signal line.")
 
                     if live_price > sma_50:
                         st_score += 1
-                        st_reasons.append(f"Price is trading above 50-day SMA (₹{sma_50:.2f}).")
+                        st_reasons.append(f"Price is trading above 50-day moving average (₹{sma_50:.2f}).")
                     else:
                         st_score -= 1
-                        st_reasons.append(f"Price is trading below 50-day SMA (₹{sma_50:.2f}).")
+                        st_reasons.append(f"Price is trading below 50-day moving average (₹{sma_50:.2f}).")
 
                     if sentiment_score > 0.05:
                         st_score += 1
-                        st_reasons.append("Live news flow is positive.")
+                        st_reasons.append(f"Live news flow sentiment is positive (+{sentiment_score:.2f}).")
                     elif sentiment_score < -0.05:
                         st_score -= 1
-                        st_reasons.append("Live news flow reflects negative market chatter.")
+                        st_reasons.append(f"Live news flow sentiment is cautious/negative ({sentiment_score:.2f}).")
+                    else:
+                        st_reasons.append("Market news sentiment is currently neutral.")
 
                     st_call = "BUY" if st_score >= 1 else ("SELL" if st_score <= -1 else "HOLD")
 
-                    # 4. Long-Term Logic
+                    # 4. Long-Term Signal Framework
                     lt_score = 0
                     lt_reasons = []
 
@@ -207,34 +250,34 @@ if st.button("Generate Signal & Analysis", type="primary"):
 
                     if roe and roe > 0.15:
                         lt_score += 1
-                        lt_reasons.append(f"Healthy ROE of {roe*100:.1f}%.")
+                        lt_reasons.append(f"Strong profitability: Return on Equity (ROE) is {roe*100:.1f}%.")
                     elif roe and roe < 0.08:
                         lt_score -= 1
-                        lt_reasons.append(f"Weak capital efficiency: ROE of {roe*100:.1f}%.")
+                        lt_reasons.append(f"Subdued capital returns: ROE is {roe*100:.1f}%.")
 
                     if debt_equity is not None:
                         if debt_equity < 100:
                             lt_score += 1
-                            lt_reasons.append("Balance sheet is safe: Low Debt-to-Equity (< 1.0).")
+                            lt_reasons.append("Conservative leverage: Debt-to-Equity is safe (< 1.0).")
                         else:
                             lt_score -= 1
-                            lt_reasons.append("Elevated debt leverage on balance sheet.")
+                            lt_reasons.append("Elevated debt: Higher leverage on the balance sheet.")
 
                     if pd.notna(sma_200):
                         if live_price > sma_200:
                             lt_score += 1
-                            lt_reasons.append(f"Price above 200-day SMA (₹{sma_200:.2f}) confirming secular uptrend.")
+                            lt_reasons.append(f"Structural secular uptrend (Above 200-day SMA of ₹{sma_200:.2f}).")
                         else:
                             lt_score -= 1
-                            lt_reasons.append(f"Price below 200-day SMA (₹{sma_200:.2f}) indicating macro downtrend.")
+                            lt_reasons.append(f"Macro multi-month downtrend (Below 200-day SMA of ₹{sma_200:.2f}).")
 
                     lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
 
-                    # --- RENDER RESULTS ---
+                    # 5. Presentation
+                    st.markdown("---")
                     company_name = info.get("longName", ticker_symbol)
-                    st.markdown("### " + company_name)
-                    
-                    # Live Price Metric Card
+                    st.subheader(company_name)
+
                     st.metric(
                         label="Live Traded Price (LTP)",
                         value=f"₹{live_price:,.2f}",
@@ -244,28 +287,39 @@ if st.button("Generate Signal & Analysis", type="primary"):
                     r_col1, r_col2 = st.columns(2)
                     with r_col1:
                         st.markdown("#### ⚡ Short-Term Outlook (1–4 Weeks)")
-                        if st_call == "BUY": st.success("### ACTION: BUY")
-                        elif st_call == "SELL": st.error("### ACTION: SELL")
-                        else: st.warning("### ACTION: HOLD")
+                        if st_call == "BUY":
+                            st.success("### ACTION: BUY")
+                        elif st_call == "SELL":
+                            st.error("### ACTION: SELL")
+                        else:
+                            st.warning("### ACTION: HOLD")
 
                         st.markdown("**Why?**")
-                        for r in st_reasons: st.write(f"- {r}")
+                        for r in st_reasons:
+                            st.write(f"- {r}")
 
                     with r_col2:
                         st.markdown("#### 🏛️ Long-Term Outlook (6–18 Months)")
-                        if lt_call == "BUY": st.success("### ACTION: BUY")
-                        elif lt_call == "SELL": st.error("### ACTION: SELL")
-                        else: st.warning("### ACTION: HOLD")
+                        if lt_call == "BUY":
+                            st.success("### ACTION: BUY")
+                        elif lt_call == "SELL":
+                            st.error("### ACTION: SELL")
+                        else:
+                            st.warning("### ACTION: HOLD")
 
                         st.markdown("**Why?**")
-                        for r in lt_reasons: st.write(f"- {r}")
+                        for r in lt_reasons:
+                            st.write(f"- {r}")
 
-                    # News Feed
+                    # 6. Headlines Section
                     st.markdown("---")
                     st.markdown("#### 📰 Recent Headlines Scanned")
-                    for n in news_items:
-                        badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
-                        st.markdown(f"**[{badge}]** [{n['title']}]({n['link']})")
+                    if news_items:
+                        for n in news_items:
+                            badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
+                            st.markdown(f"**[{badge}]** [{n['title']}]({n['link']})")
+                    else:
+                        st.info("No recent news headlines found for this symbol.")
 
             except Exception as e:
                 st.error(f"Error analyzing ticker: {e}")
