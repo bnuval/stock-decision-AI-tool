@@ -19,9 +19,71 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# --- STICKY HEADER & MOBILE TAB NAVIGATION CSS ---
 st.markdown("""
 <style>
+    /* Reduce top page padding so the sticky header stays at the browser edge */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 2.5rem !important;
+    }
+
+    /* Sticky Container for the Page Title and Sub-caption */
+    .sticky-header-container {
+        position: sticky;
+        top: 0;
+        z-index: 998;
+        background-color: var(--background-color, #ffffff);
+        padding-top: 0.5rem;
+        padding-bottom: 0.25rem;
+        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
+    }
+
+    /* Target Streamlit's native Tab list bar to make it sticky under the header */
+    div[data-baseweb="tab-list"] {
+        position: sticky;
+        top: 4.2rem;
+        z-index: 997;
+        background-color: var(--background-color, #ffffff);
+        padding: 0.4rem 0.2rem;
+        border-bottom: 2px solid rgba(128, 128, 128, 0.2);
+        display: flex;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+
+    /* Ensure individual tab buttons stay legible and swipeable on mobile */
+    div[data-baseweb="tab-list"] button {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        padding: 0.5rem 0.85rem !important;
+        font-size: 0.92rem !important;
+    }
+
+    /* Mobile-first metric and card enhancements */
     @media (max-width: 768px) {
+        .sticky-header-container {
+            top: 0;
+            padding-top: 0.25rem;
+        }
+        .sticky-header-container h1 {
+            font-size: 1.35rem !important;
+            margin-bottom: 0.1rem !important;
+        }
+        .sticky-header-container p {
+            font-size: 0.75rem !important;
+            margin-bottom: 0.2rem !important;
+        }
+        div[data-baseweb="tab-list"] {
+            top: 3.6rem;
+            padding: 0.25rem 0;
+        }
+        div[data-baseweb="tab-list"] button {
+            font-size: 0.82rem !important;
+            padding: 0.4rem 0.65rem !important;
+        }
         .stMetric { padding: 6px !important; }
         .stMetric label { font-size: 0.75rem !important; }
         .stMetric div[data-testid="stMetricValue"] { font-size: 1.25rem !important; }
@@ -75,11 +137,9 @@ ALL_NSE_STOCKS = get_all_nse_symbols()
 def resolve_ticker_online(query_text: str):
     clean_query = query_text.strip().upper()
 
-    # 1. Direct Check: If the token is already a known NSE symbol
     if clean_query in ALL_NSE_STOCKS:
         return f"{clean_query}.NS", clean_query
 
-    # 2. Online search via Yahoo Finance API
     url = "https://query1.finance.yahoo.com/v1/finance/search"
     params = {"q": clean_query, "quotesCount": 8, "enableFuzzyQuery": True}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -341,7 +401,7 @@ def process_universal_chatbot(user_query: str):
     raw_query = user_query.strip()
     upper = raw_query.upper()
 
-    # --- CATEGORY A: BROAD BUY & INVESTMENT QUESTIONS ---
+    # Broad investment questions
     if any(k in upper for k in [
         "WHICH SHARE IS BEST TO BUY", "WHICH STOCK IS BEST TO BUY", "WHAT TO BUY NOW",
         "WHICH SHARE TO BUY TODAY", "BEST SHARE TO BUY NOW", "BEST STOCK TO BUY",
@@ -387,7 +447,7 @@ def process_universal_chatbot(user_query: str):
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
-    # --- CATEGORY B: MULTI-STOCK COMPARISONS ---
+    # Multi-stock comparisons
     if (" VS " in upper or " OR " in upper) and any(k in upper for k in ["COMPARE", "BETTER", "WHICH"]):
         words = re.findall(r'\b[A-Za-z]+\b', raw_query)
         found_tickers = []
@@ -423,7 +483,7 @@ def process_universal_chatbot(user_query: str):
             except Exception:
                 pass
 
-    # --- CATEGORY C: EDUCATIONAL & MARKET CONCEPTS ---
+    # Educational concepts
     if "RSI" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
         return (
             "### 📊 What is RSI (Relative Strength Index)?\n\n"
@@ -449,7 +509,7 @@ def process_universal_chatbot(user_query: str):
             "A Stop-Loss is an automatic risk-management order that triggers a sale if the price drops to a chosen level, capping trade losses and preserving capital."
         )
 
-    # --- CATEGORY D: SPECIFIC COMPANY QUERIES (DIRECT TICKER & TYPO HANDLING) ---
+    # Specific company checks
     words = [w.strip(" ?.,!").upper() for w in raw_query.split()]
     direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
 
@@ -558,10 +618,17 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- UI MAIN NAVIGATION ---
-st.title("⚡ NSE Mobile Pulse & AI Advisor")
-st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub")
+# --- STICKY PAGE HEADER ---
+st.markdown(f"""
+<div class="sticky-header-container">
+    <h1 style="margin: 0; padding: 0;">⚡ NSE Mobile Pulse & AI Advisor</h1>
+    <p style="margin: 0; color: gray; font-size: 0.88rem;">
+        Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
+# --- STICKY TABS NAVIGATION ---
 tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
     "📊 Market Watch",
     "💬 Stock Chatbot",
