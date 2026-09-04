@@ -19,69 +19,94 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- PINNED STICKY HEADER & TABS CSS ---
+# --- BULLETPROOF FIXED STICKY HEADER & TABS CSS ---
 st.markdown("""
 <style>
+    /* 1. Eliminate default Streamlit header bar to claim top pixels */
     header[data-testid="stHeader"] {
         display: none !important;
+        height: 0px !important;
     }
 
+    /* 2. Top padding buffer so scrollable page content never overlaps fixed headers */
     .block-container {
-        padding-top: 0.4rem !important;
-        padding-left: 0.75rem !important;
-        padding-right: 0.75rem !important;
+        padding-top: 6.8rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
         padding-bottom: 4rem !important;
     }
 
-    .sticky-top-box {
-        position: sticky;
-        top: 0px;
-        z-index: 99999;
-        background: #0e1117;
-        padding: 0.4rem 0.2rem 0.2rem 0.2rem;
-        margin-bottom: 0px;
+    /* 3. Fixed Page Title Header (Layer 1) */
+    .sticky-top-header {
+        position: fixed !important;
+        top: 0px !important;
+        left: 0px !important;
+        width: 100vw !important;
+        height: 3.5rem !important;
+        background-color: #0e1117 !important;
+        z-index: 999999 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        padding: 0 1rem !important;
+        border-bottom: 1px solid #1f242d !important;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5) !important;
     }
 
-    .sticky-top-box h2 {
-        font-size: 1.22rem !important;
+    .sticky-top-header h2 {
+        font-size: 1.18rem !important;
         font-weight: 700 !important;
         color: #f0f2f6 !important;
         margin: 0 !important;
         padding: 0 !important;
         line-height: 1.2 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
     }
 
-    .sticky-top-box p {
-        font-size: 0.76rem !important;
+    .sticky-top-header p {
+        font-size: 0.74rem !important;
         color: #9aa0a6 !important;
-        margin: 0.15rem 0 0 0 !important;
+        margin: 0.1rem 0 0 0 !important;
         padding: 0 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
     }
 
+    /* 4. Fixed Tabs Strip (Layer 2) */
     div[data-baseweb="tab-list"] {
-        position: sticky !important;
-        top: 3.6rem !important;
-        z-index: 99998 !important;
-        background: #0e1117 !important;
-        padding: 0.35rem 0 !important;
-        margin-bottom: 0.75rem !important;
-        border-bottom: 2px solid #262730 !important;
+        position: fixed !important;
+        top: 3.5rem !important;
+        left: 0px !important;
+        width: 100vw !important;
+        height: 2.8rem !important;
+        background-color: #161a23 !important;
+        z-index: 999998 !important;
         display: flex !important;
+        flex-direction: row !important;
         flex-wrap: nowrap !important;
+        align-items: center !important;
+        padding: 0 0.8rem !important;
         overflow-x: auto !important;
+        overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
+        border-bottom: 2px solid #262c38 !important;
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3) !important;
     }
 
     div[data-baseweb="tab-list"]::-webkit-scrollbar {
         display: none !important;
     }
 
+    /* Individual Tab Buttons */
     div[data-baseweb="tab-list"] button {
         white-space: nowrap !important;
         flex-shrink: 0 !important;
-        font-size: 0.88rem !important;
-        padding: 0.45rem 0.85rem !important;
+        font-size: 0.86rem !important;
+        padding: 0.4rem 0.85rem !important;
         color: #c9d1d9 !important;
     }
 
@@ -90,21 +115,27 @@ st.markdown("""
         font-weight: 600 !important;
     }
 
+    /* Mobile screens (phones & small viewports) */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 0.2rem !important;
-            padding-left: 0.4rem !important;
-            padding-right: 0.4rem !important;
+            padding-top: 6.2rem !important;
+            padding-left: 0.45rem !important;
+            padding-right: 0.45rem !important;
         }
-        .sticky-top-box h2 {
+        .sticky-top-header {
+            height: 3.2rem !important;
+            padding: 0 0.65rem !important;
+        }
+        .sticky-top-header h2 {
             font-size: 1.02rem !important;
         }
-        .sticky-top-box p {
+        .sticky-top-header p {
             font-size: 0.68rem !important;
         }
         div[data-baseweb="tab-list"] {
-            top: 3.1rem !important;
-            padding: 0.2rem 0 !important;
+            top: 3.2rem !important;
+            height: 2.6rem !important;
+            padding: 0 0.4rem !important;
         }
         div[data-baseweb="tab-list"] button {
             font-size: 0.78rem !important;
@@ -129,7 +160,7 @@ def get_market_status():
     current_time = now_ist.time()
 
     is_open = False
-    if weekday < 5:  # Monday to Friday
+    if weekday < 5:
         if time(9, 15) <= current_time <= time(15, 30):
             is_open = True
     return is_open, now_ist
@@ -569,15 +600,15 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- STICKY TOP TITLE BLOCK ---
+# --- FIXED TOP PAGE HEADER (LAYER 1) ---
 st.markdown(f"""
-<div class="sticky-top-box">
+<div class="sticky-top-header">
     <h2>⚡ NSE Mobile Pulse & AI Advisor</h2>
     <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- STICKY TABS ROW ---
+# --- FIXED TABS STRIP (LAYER 2) ---
 tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
     "📊 Market Watch",
     "💬 Stock Chatbot",
@@ -591,8 +622,7 @@ tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
 with tab_movers:
     is_market_open, now_ist = get_market_status()
 
-    # Define the fragment with conditional auto-refresh:
-    # 20 seconds during live market hours, None (manual only) when market is closed
+    # 20s auto-refresh during open market; manual-only when market is closed
     fragment_interval = 20 if is_market_open else None
 
     @st.fragment(run_every=fragment_interval)
@@ -600,7 +630,7 @@ with tab_movers:
         is_open, current_time_ist = get_market_status()
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
-        # 1. Market Status Header & Manual Refresh Button
+        # Market Status Header & Manual Refresh Button
         if is_open:
             st.subheader("🟢 Today's Live Market Movers (Market Open)")
             st.caption(f"🔄 Auto-updating every 20s | Clock: **{time_str}**")
@@ -614,13 +644,12 @@ with tab_movers:
                     get_live_market_data.clear()
                     screen_52w_low_strong_picks.clear()
 
-        # Fetch Data
         gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
 
         if not is_open and last_date:
             st.info(f"📅 Data represents the last completed exchange session: **{last_date}**")
 
-        # 2. Strategic Recommendations
+        # Strategic Recommendations
         st.markdown("---")
         if is_open:
             st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
@@ -660,7 +689,7 @@ with tab_movers:
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
 
-        # 3. Movers Tables
+        # Movers Tables
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
@@ -672,7 +701,7 @@ with tab_movers:
             if not losers_df.empty:
                 st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
-        # 4. Top 3 52-Week Low Picks
+        # Top 3 52-Week Low Picks
         st.markdown("---")
         st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
         st.caption("Zero/low debt, solid balance sheet, and closest to 52-week support with calculated Stop-Loss & Target levels.")
