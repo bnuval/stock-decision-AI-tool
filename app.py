@@ -5,11 +5,13 @@ import ta
 import feedparser
 import requests
 import io
+import time
+from datetime import datetime
 from textblob import TextBlob
 
 # Page layout configuration
 st.set_page_config(
-    page_title="NSE Live Screener & Signal Engine",
+    page_title="NSE Live Auto-Updating Screener",
     page_icon="📈",
     layout="wide"
 )
@@ -44,17 +46,16 @@ def get_all_nse_symbols():
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
 
-# --- 2. LIVE GAINERS & LOSERS SCANNER (MULTIINDEX BUG FIXED) ---
-@st.cache_data(ttl=60)
+# --- 2. LIVE GAINERS & LOSERS SCANNER (SHORT CACHE FOR FAST RE-TICKS) ---
+@st.cache_data(ttl=10)
 def get_live_market_data(universe):
-    scan_universe = universe[:60]
+    scan_universe = universe[:50]
     tickers = [f"{s}.NS" for s in scan_universe]
     try:
         raw = yf.download(tickers, period="5d", interval="1d", progress=False)
         if raw.empty:
             return pd.DataFrame(), pd.DataFrame()
 
-        # Handle MultiIndex column structures from recent yfinance versions
         if isinstance(raw.columns, pd.MultiIndex):
             if "Close" in raw.columns.levels[0]:
                 data = raw["Close"]
@@ -70,7 +71,6 @@ def get_live_market_data(universe):
             ticker_ns = f"{symbol}.NS"
             series = None
 
-            # Check both formatted and bare ticker representations
             if ticker_ns in data.columns:
                 series = data[ticker_ns].dropna()
             elif symbol in data.columns:
@@ -188,71 +188,113 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
     return avg_score, articles
 
 
-# --- UI LAYOUT ---
+# --- UI HEADER ---
 st.title("⚡ NSE Real-Time Market Pulse & Decision Engine")
-st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Listed Equities • Live Movers • Algorithmic Value Screener")
+st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Listed Equities • Live Movers • Auto-Updating")
 
-gainers_df, losers_df = get_live_market_data(ALL_NSE_STOCKS)
+# =====================================================================
+# DYNAMIC FRAGMENT: Auto-refreshes every 15s without full page reload
+# =====================================================================
+@st.fragment(run_every=15)
+def render_live_market_movers():
+    gainers_df, losers_df = get_live_market_data(ALL_NSE_STOCKS)
+    now_time = datetime.now().strftime("%H:%M:%S")
 
-# --- SECTION 1: TOP 5 STRATEGIC PICKS ---
-st.subheader("⭐ Top 5 Algorithmic Recommendations")
+    # Header with live timestamp badge
+    st.subheader(f"📊 Today's Market Movers")
+    st.caption(f"🔄 Auto-updating in background every 15s | Last tick: **{now_time}**")
 
-if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
-    top_g1 = gainers_df.iloc[0]["Stock"]
-    top_g2 = gainers_df.iloc[1]["Stock"]
-    top_l1 = losers_df.iloc[0]["Stock"]
-    top_l2 = losers_df.iloc[1]["Stock"]
-    top_l3 = losers_df.iloc[2]["Stock"]
+    # --- TOP 5 STRATEGIC PICKS ---
+    if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
+        top_g1 = gainers_df.iloc[0]["Stock"]
+        top_g2 = gainers_df.iloc[1]["Stock"]
+        top_l1 = losers_df.iloc[0]["Stock"]
+        top_l2 = losers_df.iloc[1]["Stock"]
+        top_l3 = losers_df.iloc[2]["Stock"]
 
-    picks = [
-        {
-            "Stock": top_g1,
-            "Horizon": "Intraday Momentum",
-            "Action": "BUY ON DIP",
-            "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-            "Why": "Strong momentum and volume participation. Favorable risk-reward for intraday setups near VWAP."
-        },
-        {
-            "Stock": top_g2,
-            "Horizon": "Short-Term Swing (1–4 Wks)",
-            "Action": "BUY (Breakout)",
-            "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)",
-            "Why": "Technical breakout clearing immediate resistance levels with supportive volume."
-        },
-        {
-            "Stock": top_l1,
-            "Horizon": "Short-Term Rebound (1–3 Wks)",
-            "Action": "BUY (Mean Reversion)",
-            "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)",
-            "Why": "Short-term selling exhaustion near lower bands, positioning for a technical bounce."
-        },
-        {
-            "Stock": top_l2,
-            "Horizon": "Long-Term Value (6–12 Mos)",
-            "Action": "BUY (Accumulate)",
-            "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)",
-            "Why": "Temporary market drawdown on quality balance sheets, offering margin of safety."
-        },
-        {
-            "Stock": top_l3,
-            "Horizon": "Long-Term Core (12–24 Mos)",
-            "Action": "BUY (Compounder)",
-            "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)",
-            "Why": "Macro pullback on fundamentally resilient assets. Ideal for phased accumulation."
-        }
-    ]
+        picks = [
+            {
+                "Stock": top_g1,
+                "Horizon": "Intraday Momentum",
+                "Action": "BUY ON DIP",
+                "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
+                "Why": "Strong volume participation and positive price discovery near day high."
+            },
+            {
+                "Stock": top_g2,
+                "Horizon": "Short-Term Swing (1–4 Wks)",
+                "Action": "BUY (Breakout)",
+                "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)",
+                "Why": "Technical breakout clearing immediate resistance levels."
+            },
+            {
+                "Stock": top_l1,
+                "Horizon": "Short-Term Rebound (1–3 Wks)",
+                "Action": "BUY (Mean Reversion)",
+                "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)",
+                "Why": "Selling exhaustion near lower bands, positioning for a technical bounce."
+            },
+            {
+                "Stock": top_l2,
+                "Horizon": "Long-Term Value (6–12 Mos)",
+                "Action": "BUY (Accumulate)",
+                "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)",
+                "Why": "Market drawdown on resilient balance sheet, offering attractive margin of safety."
+            },
+            {
+                "Stock": top_l3,
+                "Horizon": "Long-Term Core (12–24 Mos)",
+                "Action": "BUY (Compounder)",
+                "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)",
+                "Why": "Macro pullback on fundamentally sound asset with strong return ratios."
+            }
+        ]
 
-    p_cols = st.columns(5)
-    for idx, p in enumerate(picks):
-        with p_cols[idx]:
-            with st.container(border=True):
-                st.markdown(f"### {p['Stock']}")
-                st.caption(p["Origin"])
-                st.success(f"**{p['Action']}**")
-                st.markdown(f"**Horizon:** {p['Horizon']}")
-                st.markdown(f"**Why?** {p['Why']}")
-else:
-    st.info("Gathering live market ticks to compute strategic recommendations...")
+        st.markdown("##### ⭐ Top 5 Dynamic Recommendations")
+        p_cols = st.columns(5)
+        for idx, p in enumerate(picks):
+            with p_cols[idx]:
+                with st.container(border=True):
+                    st.markdown(f"### {p['Stock']}")
+                    st.caption(p["Origin"])
+                    st.success(f"**{p['Action']}**")
+                    st.markdown(f"**Horizon:** {p['Horizon']}")
+                    st.markdown(f"**Why?** {p['Why']}")
+
+    # --- TABLES OF TOP GAINERS & LOSERS ---
+    g_col, l_col = st.columns(2)
+    with g_col:
+        st.markdown("##### 🟢 Live Top Gainers")
+        if not gainers_df.empty:
+            st.dataframe(
+                gainers_df.style.format({
+                    "Live Price (₹)": "₹{:.2f}",
+                    "Change (₹)": "+{:.2f}",
+                    "% Change": "+{:.2f}%"
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("Loading live gainer quotes...")
+
+    with l_col:
+        st.markdown("##### 🔴 Live Top Losers")
+        if not losers_df.empty:
+            st.dataframe(
+                losers_df.style.format({
+                    "Live Price (₹)": "₹{:.2f}",
+                    "Change (₹)": "{:.2f}",
+                    "% Change": "{:.2f}%"
+                }),
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("Loading live loser quotes...")
+
+# Run the live ticking fragment
+render_live_market_movers()
 
 st.markdown("---")
 
@@ -283,43 +325,7 @@ else:
 
 st.markdown("---")
 
-# --- SECTION 3: LIVE GAINERS / LOSERS ---
-st.subheader("📊 Today's Market Movers")
-g_col, l_col = st.columns(2)
-
-with g_col:
-    st.markdown("##### 🟢 Live Top Gainers")
-    if not gainers_df.empty:
-        st.dataframe(
-            gainers_df.style.format({
-                "Live Price (₹)": "₹{:.2f}",
-                "Change (₹)": "+{:.2f}",
-                "% Change": "+{:.2f}%"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("Loading live gainer quotes...")
-
-with l_col:
-    st.markdown("##### 🔴 Live Top Losers")
-    if not losers_df.empty:
-        st.dataframe(
-            losers_df.style.format({
-                "Live Price (₹)": "₹{:.2f}",
-                "Change (₹)": "{:.2f}",
-                "% Change": "{:.2f}%"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("Loading live loser quotes...")
-
-st.markdown("---")
-
-# --- SECTION 4: SEARCH & FULL ANALYSIS ---
+# --- SECTION 3: DEEP-DIVE STOCK SEARCH & ANALYSIS ---
 st.subheader("🔍 Deep-Dive Stock Analysis & Buy/Sell Call")
 
 col_search, col_exch = st.columns([3, 1])
