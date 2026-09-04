@@ -5,3 +5,4 @@ ta
 feedparser
 textblob
 requests
+beautifulsoup4
