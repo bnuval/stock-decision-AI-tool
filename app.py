@@ -7,18 +7,19 @@ import requests
 import io
 from textblob import TextBlob
 
+# Page layout configuration
 st.set_page_config(
-    page_title="All-NSE Real-Time Screener & Advisory Engine",
+    page_title="NSE Live Screener & Signal Engine",
     page_icon="📈",
     layout="wide"
 )
 
-# --- 1. DYNAMIC DATA SOURCE: FETCH ALL NSE LISTED STOCKS ---
-@st.cache_data(ttl=86400)  # Cached for 24 hours
+# --- 1. DYNAMIC DATA SOURCE: ALL NSE LISTED STOCKS ---
+@st.cache_data(ttl=86400)
 def get_all_nse_symbols():
     """
-    Downloads the official NSE equity master file.
-    Provides complete coverage of all ~2,000+ active listed stocks.
+    Downloads the official NSE equity master file so every active listed
+    share (including newly listed and small-cap stocks) is selectable.
     """
     url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
     headers = {
@@ -28,14 +29,14 @@ def get_all_nse_symbols():
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
             df = pd.read_csv(io.StringIO(response.text))
-            # Clean and filter only regular equity series ('EQ')
             eq_df = df[df[" SERIES"] == "EQ"].copy()
             symbols = sorted(eq_df["SYMBOL"].str.strip().tolist())
-            return symbols
+            if len(symbols) > 500:
+                return symbols
     except Exception:
         pass
     
-    # Fallback to broader 100+ stock universe if NSE network connection times out
+    # Robust fallback universe of liquid stocks across sectors
     return [
         "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "HINDUNILVR", "ITC", "SBIN",
         "BHARTIARTL", "KOTAKBANK", "LT", "AXISBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA",
@@ -43,17 +44,15 @@ def get_all_nse_symbols():
         "ADANIENT", "ADANIPORTS", "COALINDIA", "BAJAJFINSV", "WIPRO", "ULTRACEMCO", "ONGC",
         "HCLTECH", "TECHM", "DIVISLAB", "VEDL", "ZOMATO", "PAYTM", "JIOFIN", "HAL",
         "BEL", "BHEL", "IRCTC", "RVNL", "IREDA", "SUZLON", "YESBANK", "IDEA", "DLF",
-        "INDUSINDBK", "NESTLEIND", "GRASIM", "HEROMOTOCO", "EICHERMOT", "LALITHAA", "KALYANKJIL"
+        "INDUSINDBK", "NESTLEIND", "GRASIM", "HEROMOTOCO", "EICHERMOT", "DABUR", "LALITHAA"
     ]
 
-# Fetch entire stock universe
 ALL_NSE_STOCKS = get_all_nse_symbols()
 
-# --- 2. LIVE GAINERS & LOSERS SCANNER (OPTIMIZED BATCH) ---
+# --- 2. LIVE GAINERS & LOSERS SCANNER ---
 @st.cache_data(ttl=60)
-def get_live_market_movers(universe):
-    """Scans the top liquid universe in batches to find real-time top 10 gainers/losers."""
-    # Use top 100 stocks for speed and reliability
+def get_live_market_data(universe):
+    """Fetches real-time intraday quotes for universe and ranks gainers/losers."""
     scan_universe = universe[:100]
     tickers = [f"{s}.NS" for s in scan_universe]
     try:
@@ -80,7 +79,53 @@ def get_live_market_movers(universe):
     except Exception:
         return pd.DataFrame(), pd.DataFrame()
 
-# --- 3. CLOUD-SAFE NEWS & SENTIMENT ---
+# --- 3. 52-WEEK LOW VALUE FINDER WITH TARGETS & STOP-LOSS ---
+@st.cache_data(ttl=300)
+def screen_52w_low_strong_picks(universe):
+    """
+    Identifies fundamentally strong stocks trading within 6% of 52-week low.
+    Calculates Buy Range, Stop-Loss, and Target Price mathematically.
+    """
+    results = []
+    for symbol in universe[:60]:
+        try:
+            ticker = yf.Ticker(f"{symbol}.NS")
+            hist = ticker.history(period="1y")
+            if hist.empty or len(hist) < 200:
+                continue
+            
+            curr_price = hist["Close"].iloc[-1]
+            low_52w = hist["Close"].min()
+            dist_from_low = ((curr_price - low_52w) / low_52w) * 100
+            
+            if dist_from_low <= 6.0:
+                info = ticker.info
+                roe = info.get("returnOnEquity", 0) or 0
+                debt_eq = info.get("debtToEquity", 999) or 999
+                
+                # Filter: Safe balance sheet & healthy returns
+                if roe >= 0.12 and debt_eq < 100:
+                    sl_short = round(low_52w * 0.98, 2)
+                    target_short = round(curr_price * 1.07, 2)
+                    sl_long = round(low_52w * 0.95, 2)
+                    target_long = round(curr_price * 1.25, 2)
+
+                    results.append({
+                        "Stock": symbol,
+                        "Price": round(curr_price, 2),
+                        "52W Low": round(low_52w, 2),
+                        "Dist %": round(dist_from_low, 2),
+                        "ROE": f"{roe*100:.1f}%",
+                        "Short SL": sl_short,
+                        "Short Target": target_short,
+                        "Long SL": sl_long,
+                        "Long Target": target_long
+                    })
+        except Exception:
+            continue
+    return pd.DataFrame(results).sort_values(by="Dist %").head(3)
+
+# --- 4. CLOUD-SAFE NEWS & SENTIMENT ---
 def fetch_cloud_safe_news(ticker_obj, symbol):
     articles = []
     total_polarity = 0
@@ -123,13 +168,13 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
 
 # --- UI HEADER ---
-st.title("⚡ All-NSE Market Screener & Decision Engine")
-st.caption(f"Loaded {len(ALL_NSE_STOCKS):,} Listed Stocks dynamically from official NSE directories")
+st.title("⚡ NSE Real-Time Market Pulse & Decision Engine")
+st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Listed Equities • Live Movers • Algorithmic Value Screener")
 
-gainers_df, losers_df = get_live_market_movers(ALL_NSE_STOCKS)
+gainers_df, losers_df = get_live_market_data(ALL_NSE_STOCKS)
 
 # --- SECTION 1: TOP 5 STRATEGIC PICKS ---
-st.subheader("⭐ Top 5 Algorithmic Picks (Intraday, Short & Long Term)")
+st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
 
 if not gainers_df.empty and not losers_df.empty:
     top_g1 = gainers_df.iloc[0]["Stock"]
@@ -188,7 +233,34 @@ if not gainers_df.empty and not losers_df.empty:
 
 st.markdown("---")
 
-# --- SECTION 2: LIVE MARKET MOVERS ---
+# --- SECTION 2: TOP 3 52-WEEK LOW PICKS WITH SL & TARGET ---
+st.subheader("🛡️ Top 3 Strong Fundamental Stocks Near 52-Week Low")
+st.caption("Filters for zero/low debt, high ROE (>12%), and oversold price bases with exact stop-loss and targets.")
+
+low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+
+if not low_screener_df.empty:
+    cols = st.columns(len(low_screener_df))
+    for i, (_, row) in enumerate(low_screener_df.iterrows()):
+        with cols[i]:
+            with st.container(border=True):
+                st.markdown(f"### 💎 {row['Stock']}")
+                st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% from 52W Low", delta_color="inverse")
+                st.write(f"**ROE:** {row['ROE']} | **52W Low:** ₹{row['52W Low']}")
+                st.markdown("---")
+                st.markdown("**⚡ Short-Term (1–4 Wks):**")
+                st.write(f"- **Buy:** ₹{row['Price']}")
+                st.write(f"- **Stop-Loss:** ₹{row['Short SL']}")
+                st.write(f"- **Target:** ₹{row['Short Target']}")
+                st.markdown("**🏛️ Long-Term (6–18 Mos):**")
+                st.write(f"- **Stop-Loss:** ₹{row['Long SL']}")
+                st.write(f"- **Target:** ₹{row['Long Target']}")
+else:
+    st.info("Scanning for stocks currently testing 52-week lows with healthy balance sheets...")
+
+st.markdown("---")
+
+# --- SECTION 3: LIVE MARKET MOVERS ---
 st.subheader("📊 Today's Market Movers (Auto-refresh every 60s)")
 g_col, l_col = st.columns(2)
 
@@ -224,7 +296,7 @@ with l_col:
 
 st.markdown("---")
 
-# --- SECTION 3: ANY-STOCK DEEP DIVE ANALYZER ---
+# --- SECTION 4: DEEP-DIVE STOCK SEARCH & ANALYSIS ---
 st.subheader("🔍 Deep-Dive Stock Analysis & Buy/Sell Call")
 
 col_search, col_exch = st.columns([3, 1])
