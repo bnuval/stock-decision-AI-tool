@@ -11,7 +11,7 @@ import pytz
 from bs4 import BeautifulSoup
 from textblob import TextBlob
 
-# --- MOBILE-FIRST CONFIGURATION ---
+# --- MOBILE-FIRST PAGE CONFIGURATION ---
 st.set_page_config(
     page_title="NSE Pulse, IPO Hub & AI Advisor",
     page_icon="📈",
@@ -19,74 +19,119 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- STICKY HEADER & MOBILE TAB NAVIGATION CSS ---
+# --- PINNED STICKY HEADER & MOBILE VIEWPORT FIX ---
 st.markdown("""
 <style>
-    /* Reduce top page padding so the sticky header stays at the browser edge */
+    /* 1. Prevent default Streamlit padding collisions */
     .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 2.5rem !important;
+        padding-top: 6.8rem !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
+        padding-bottom: 3.5rem !important;
     }
 
-    /* Sticky Container for the Page Title and Sub-caption */
-    .sticky-header-container {
-        position: sticky;
-        top: 0;
-        z-index: 998;
-        background-color: var(--background-color, #ffffff);
-        padding-top: 0.5rem;
-        padding-bottom: 0.25rem;
-        border-bottom: 1px solid rgba(128, 128, 128, 0.15);
-    }
-
-    /* Target Streamlit's native Tab list bar to make it sticky under the header */
-    div[data-baseweb="tab-list"] {
-        position: sticky;
-        top: 4.2rem;
-        z-index: 997;
-        background-color: var(--background-color, #ffffff);
-        padding: 0.4rem 0.2rem;
-        border-bottom: 2px solid rgba(128, 128, 128, 0.2);
+    /* 2. Lock Header firmly to Viewport Top */
+    .pinned-header {
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: 3.6rem !important;
+        background-color: #0e1117 !important;
+        color: #ffffff !important;
+        z-index: 999999 !important;
         display: flex;
-        flex-wrap: nowrap;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: thin;
+        flex-direction: column;
+        justify-content: center;
+        padding: 0 1.2rem !important;
+        border-bottom: 1px solid #262730 !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45) !important;
     }
 
-    /* Ensure individual tab buttons stay legible and swipeable on mobile */
+    .pinned-header h1 {
+        font-size: 1.15rem !important;
+        font-weight: 700 !important;
+        line-height: 1.2 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        color: #f0f2f6 !important;
+    }
+
+    .pinned-header p {
+        font-size: 0.72rem !important;
+        color: #9aa0a6 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+
+    /* 3. Pin Streamlit's native Tab Bar right beneath the Fixed Header */
+    div[data-baseweb="tab-list"] {
+        position: fixed !important;
+        top: 3.6rem !important;
+        left: 0 !important;
+        width: 100% !important;
+        height: 2.8rem !important;
+        background-color: #161a24 !important;
+        z-index: 999998 !important;
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: nowrap !important;
+        align-items: center !important;
+        padding: 0 0.8rem !important;
+        overflow-x: auto !important;
+        overflow-y: hidden !important;
+        -webkit-overflow-scrolling: touch !important;
+        scrollbar-width: none !important;
+        border-bottom: 2px solid #262730 !important;
+    }
+    div[data-baseweb="tab-list"]::-webkit-scrollbar {
+        display: none !important;
+    }
+
+    /* Mobile tab buttons */
     div[data-baseweb="tab-list"] button {
         white-space: nowrap !important;
         flex-shrink: 0 !important;
-        padding: 0.5rem 0.85rem !important;
-        font-size: 0.92rem !important;
+        font-size: 0.85rem !important;
+        padding: 0.4rem 0.85rem !important;
+        color: #d1d5db !important;
     }
 
-    /* Mobile-first metric and card enhancements */
+    /* Responsive Mobile Screen Sizing */
     @media (max-width: 768px) {
-        .sticky-header-container {
-            top: 0;
-            padding-top: 0.25rem;
+        .block-container {
+            padding-top: 6.4rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
         }
-        .sticky-header-container h1 {
-            font-size: 1.35rem !important;
-            margin-bottom: 0.1rem !important;
+        .pinned-header {
+            height: 3.4rem !important;
+            padding: 0 0.8rem !important;
         }
-        .sticky-header-container p {
-            font-size: 0.75rem !important;
-            margin-bottom: 0.2rem !important;
+        .pinned-header h1 {
+            font-size: 1.02rem !important;
+        }
+        .pinned-header p {
+            font-size: 0.68rem !important;
         }
         div[data-baseweb="tab-list"] {
-            top: 3.6rem;
-            padding: 0.25rem 0;
+            top: 3.4rem !important;
+            height: 2.6rem !important;
+            padding: 0 0.4rem !important;
         }
         div[data-baseweb="tab-list"] button {
-            font-size: 0.82rem !important;
-            padding: 0.4rem 0.65rem !important;
+            font-size: 0.78rem !important;
+            padding: 0.35rem 0.65rem !important;
         }
-        .stMetric { padding: 6px !important; }
-        .stMetric label { font-size: 0.75rem !important; }
-        .stMetric div[data-testid="stMetricValue"] { font-size: 1.25rem !important; }
+        .stMetric { padding: 4px !important; }
+        .stMetric label { font-size: 0.72rem !important; }
+        .stMetric div[data-testid="stMetricValue"] { font-size: 1.15rem !important; }
         div[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
         div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
     }
@@ -205,7 +250,7 @@ def get_live_market_data(universe):
     except Exception:
         return pd.DataFrame(), pd.DataFrame(), last_session_date
 
-# --- 5. GUARANTEED TOP 3 52-WEEK LOW VALUE PICKS ---
+# --- 5. TOP 3 52-WEEK LOW PICKS ---
 @st.cache_data(ttl=300)
 def screen_52w_low_strong_picks(universe):
     candidate_symbols = [
@@ -256,7 +301,7 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME ONGOING & UPCOMING IPO HUB ---
+# --- 6. REAL-TIME IPO HUB ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -338,25 +383,13 @@ def fetch_live_ipo_gmp():
                 "Company": "Qualiance International", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 127.0,
                 "GMP (₹)": 55.0, "Est Gain %": 43.3, "Lot Size": "1,000", "Subscription": "12.4x", "Open Date": "Open Now",
                 "Close Date": "Closing Soon", "Recommendation": "STRONG APPLY",
-                "Analysis & Rationale": "43%+ Grey Market Premium. Strong early subscription metrics and solid order book."
+                "Analysis & Rationale": "43%+ Grey Market Premium. Strong early subscription metrics."
             },
             {
                 "Company": "Pranav Constructions", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 124.0,
                 "GMP (₹)": 34.0, "Est Gain %": 27.4, "Lot Size": "120", "Subscription": "-", "Open Date": "Next Week",
                 "Close Date": "Next Week", "Recommendation": "APPLY (Listing Gain)",
-                "Analysis & Rationale": "27%+ listing premium expectations with steady residential revenue growth."
-            },
-            {
-                "Company": "Kanohar Electricals", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 632.0,
-                "GMP (₹)": 205.0, "Est Gain %": 32.4, "Lot Size": "23", "Subscription": "-", "Open Date": "Upcoming",
-                "Close Date": "Upcoming", "Recommendation": "STRONG APPLY",
-                "Analysis & Rationale": "32%+ premium in grey market; electrical infra tailwinds provide long-term support."
-            },
-            {
-                "Company": "Apana Logistics", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 60.0,
-                "GMP (₹)": 3.0, "Est Gain %": 5.0, "Lot Size": "2,000", "Subscription": "1.1x", "Open Date": "Open Now",
-                "Close Date": "Closing Soon", "Recommendation": "AVOID",
-                "Analysis & Rationale": "Thin 5% GMP cushion. High lot size carries disproportionate capital risk."
+                "Analysis & Rationale": "27%+ listing premium expectations."
             }
         ]
 
@@ -396,7 +429,7 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
     return (total_polarity / len(articles)) if articles else 0, articles
 
-# --- 8. UNIVERSAL ADAPTIVE STOCK CHATBOT ---
+# --- 8. UNIVERSAL ADAPTIVE CHATBOT ---
 def process_universal_chatbot(user_query: str):
     raw_query = user_query.strip()
     upper = raw_query.upper()
@@ -447,69 +480,7 @@ def process_universal_chatbot(user_query: str):
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
-    # Multi-stock comparisons
-    if (" VS " in upper or " OR " in upper) and any(k in upper for k in ["COMPARE", "BETTER", "WHICH"]):
-        words = re.findall(r'\b[A-Za-z]+\b', raw_query)
-        found_tickers = []
-        for w in words:
-            sym, name = resolve_ticker_online(w)
-            if sym and sym not in found_tickers:
-                found_tickers.append(sym)
-            if len(found_tickers) == 2:
-                break
-
-        if len(found_tickers) == 2:
-            try:
-                t1 = yf.Ticker(found_tickers[0])
-                t2 = yf.Ticker(found_tickers[1])
-                i1, i2 = t1.info or {}, t2.info or {}
-                p1 = t1.history(period="5d")["Close"].iloc[-1]
-                p2 = t2.history(period="5d")["Close"].iloc[-1]
-                roe1 = (i1.get("returnOnEquity") or 0) * 100
-                roe2 = (i2.get("returnOnEquity") or 0) * 100
-                pe1 = i1.get("trailingPE", "N/A")
-                pe2 = i2.get("trailingPE", "N/A")
-
-                return (
-                    f"### ⚖️ Comparison: **{found_tickers[0]}** vs **{found_tickers[1]}**\n\n"
-                    f"| Metric | {found_tickers[0]} | {found_tickers[1]} |\n"
-                    f"| :--- | :--- | :--- |\n"
-                    f"| **Current Price** | ₹{p1:,.2f} | ₹{p2:,.2f} |\n"
-                    f"| **P/E Ratio** | {pe1} | {pe2} |\n"
-                    f"| **Return on Equity (ROE)** | {roe1:.1f}% | {roe2:.1f}% |\n\n"
-                    f"**Summary:** Check P/E relative to sector valuation for value. "
-                    f"For compounding quality, the company with higher ROE ({found_tickers[0] if roe1 > roe2 else found_tickers[1]}) reflects superior capital allocation."
-                )
-            except Exception:
-                pass
-
-    # Educational concepts
-    if "RSI" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
-        return (
-            "### 📊 What is RSI (Relative Strength Index)?\n\n"
-            "RSI measures price change speed and magnitude on a scale of 0 to 100:\n"
-            "- **Above 70:** **Overbought** (Elevated risk of pullback or consolidation).\n"
-            "- **Below 30:** **Oversold** (High probability of technical bounce).\n"
-            "- **40–60:** Neutral trend."
-        )
-
-    if ("PE RATIO" in upper or "P/E" in upper) and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
-        return (
-            "### 🏛️ What is the P/E Ratio?\n\n"
-            "The Price-to-Earnings (P/E) ratio shows how much you pay per ₹1 of profit:\n"
-            "- **Formula:** Current Stock Price ÷ Earnings Per Share (EPS).\n"
-            "- **Low P/E:** Potential value opportunity (or company facing headwinds).\n"
-            "- **High P/E:** Market expects high future earnings growth.\n\n"
-            "*Always compare a stock's P/E with peers in the same industry.*"
-        )
-
-    if "STOP LOSS" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
-        return (
-            "### 🛡️ What is a Stop-Loss (SL)?\n\n"
-            "A Stop-Loss is an automatic risk-management order that triggers a sale if the price drops to a chosen level, capping trade losses and preserving capital."
-        )
-
-    # Specific company checks
+    # Specific stock queries
     words = [w.strip(" ?.,!").upper() for w in raw_query.split()]
     direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
 
@@ -530,8 +501,7 @@ def process_universal_chatbot(user_query: str):
                 "- *'Analyse INFY'*\n"
                 "- *'Which share is best to buy now?'*\n"
                 "- *'Will Infosys price hike in next few days?'*\n"
-                "- *'Is Tata Motors safe to hold for long term?'*\n"
-                "- *'Compare TCS vs Infosys'*"
+                "- *'Is Tata Motors safe to hold for long term?'*"
             )
 
         ticker_symbol, company_name = resolve_ticker_online(search_term)
@@ -618,17 +588,15 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- STICKY PAGE HEADER ---
+# --- FIXED TOP PAGE HEADER ---
 st.markdown(f"""
-<div class="sticky-header-container">
-    <h1 style="margin: 0; padding: 0;">⚡ NSE Mobile Pulse & AI Advisor</h1>
-    <p style="margin: 0; color: gray; font-size: 0.88rem;">
-        Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub
-    </p>
+<div class="pinned-header">
+    <h1>⚡ NSE Mobile Pulse & AI Advisor</h1>
+    <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- STICKY TABS NAVIGATION ---
+# --- PINNED STICKY TABS ---
 tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
     "📊 Market Watch",
     "💬 Stock Chatbot",
