@@ -73,7 +73,13 @@ ALL_NSE_STOCKS = get_all_nse_symbols()
 
 # --- 3. DYNAMIC ONLINE TICKER RESOLVER ---
 def resolve_ticker_online(query_text: str):
-    clean_query = query_text.strip()
+    clean_query = query_text.strip().upper()
+
+    # 1. Direct Check: If the token is already a known NSE symbol
+    if clean_query in ALL_NSE_STOCKS:
+        return f"{clean_query}.NS", clean_query
+
+    # 2. Online search via Yahoo Finance API
     url = "https://query1.finance.yahoo.com/v1/finance/search"
     params = {"q": clean_query, "quotesCount": 8, "enableFuzzyQuery": True}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -142,10 +148,6 @@ def get_live_market_data(universe):
 # --- 5. GUARANTEED TOP 3 52-WEEK LOW VALUE PICKS ---
 @st.cache_data(ttl=300)
 def screen_52w_low_strong_picks(universe):
-    """
-    Batch-downloads 1-year historical closing data across liquid large/mid caps,
-    computes distance to 52W low, and extracts top 3 value opportunities.
-    """
     candidate_symbols = [
         "HINDUNILVR", "DABUR", "ITC", "IRCTC", "INFY", "TCS", "HDFCBANK",
         "KOTAKBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO", "TATAMOTORS"
@@ -170,8 +172,6 @@ def screen_52w_low_strong_picks(universe):
 
                 if low_52w > 0:
                     dist_from_low = ((curr_price - low_52w) / low_52w) * 100
-
-                    # Conservative target and stop-loss logic
                     sl_short = round(low_52w * 0.98, 2)
                     target_short = round(curr_price * 1.08, 2)
                     sl_long = round(low_52w * 0.95, 2)
@@ -199,10 +199,6 @@ def screen_52w_low_strong_picks(universe):
 # --- 6. REAL-TIME ONGOING & UPCOMING IPO HUB ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
-    """
-    Parses live Mainboard and SME IPO data with exact Status tagging
-    (Ongoing/Open vs Upcoming vs Closed), Grey Market Premium (GMP), and signals.
-    """
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -227,7 +223,6 @@ def fetch_live_ipo_gmp():
                         open_dt = cols[7].get_text(strip=True)
                         close_dt = cols[8].get_text(strip=True) if len(cols) > 8 else "TBD"
 
-                        # 1. Determine Status
                         status = "Upcoming"
                         if any(k in raw_name for k in ["SMEO", "IPOO", "Open"]):
                             status = "Ongoing (Open)"
@@ -239,7 +234,6 @@ def fetch_live_ipo_gmp():
                         ipo_type = "SME" if "SME" in raw_name.upper() else "Mainboard"
                         clean_name = re.sub(r'(IPOU|IPOC|IPOL|IPOO|NSE|BSE|SME|Allotted|SMEO|SMEU|SMEC).*', '', raw_name).strip()
 
-                        # 2. Parse Numeric Price & GMP
                         gmp_match = re.search(r'₹?\s*([\d\.]+)', gmp_raw)
                         pct_match = re.search(r'\(([\d\.]+)%\)', gmp_raw)
                         price_match = re.search(r'([\d\.]+)', price_raw)
@@ -248,19 +242,18 @@ def fetch_live_ipo_gmp():
                         gmp_pct = float(pct_match.group(1)) if pct_match else 0.0
                         issue_price = float(price_match.group(1)) if price_match else 0.0
 
-                        # 3. Formulate Action Signals
                         if gmp_pct >= 30.0:
                             recom = "STRONG APPLY"
-                            rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% estimated listing gain). Heavy investor appetite."
+                            rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% estimated gain). Solid investor appetite."
                         elif 15.0 <= gmp_pct < 30.0:
                             recom = "APPLY (Listing Gain)"
-                            rationale = f"Healthy listing cushion ({gmp_pct:.1f}% GMP). Safe for short-term flipping."
+                            rationale = f"Healthy listing cushion ({gmp_pct:.1f}% GMP). Favorable for short-term gains."
                         elif 5.0 <= gmp_pct < 15.0:
                             recom = "NEUTRAL / CAUTION"
-                            rationale = "Thin safety margin (5–15% GMP). Market volatility on listing day could trim profits."
+                            rationale = "Thin safety margin (5–15% GMP). Market shifts on listing day could trim profits."
                         else:
                             recom = "AVOID"
-                            rationale = "Low or negative grey market interest. High risk of listing at a discount."
+                            rationale = "Low or negative grey market interest. Risk of discounted listing."
 
                         ipo_records.append({
                             "Company": clean_name,
@@ -279,7 +272,6 @@ def fetch_live_ipo_gmp():
     except Exception:
         pass
 
-    # Built-in live market pipeline fallback
     if not ipo_records:
         ipo_records = [
             {
@@ -346,13 +338,6 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
 # --- 8. UNIVERSAL ADAPTIVE STOCK CHATBOT ---
 def process_universal_chatbot(user_query: str):
-    """
-    Answers any share market query:
-    1. Broad recommendations ('Which share is best to buy now?', 'What to buy today?')
-    2. Educational and trading concept definitions (PE, RSI, Market Cap, Option Greeks, Stop Loss)
-    3. Multi-stock comparisons ('Compare TCS vs Infosys')
-    4. Live dynamic company analysis (searches ticker online with live price/indicators)
-    """
     raw_query = user_query.strip()
     upper = raw_query.upper()
 
@@ -403,7 +388,7 @@ def process_universal_chatbot(user_query: str):
         return resp
 
     # --- CATEGORY B: MULTI-STOCK COMPARISONS ---
-    if " VS " in upper or " OR " in upper and any(k in upper for k in ["COMPARE", "BETTER", "WHICH"]):
+    if (" VS " in upper or " OR " in upper) and any(k in upper for k in ["COMPARE", "BETTER", "WHICH"]):
         words = re.findall(r'\b[A-Za-z]+\b', raw_query)
         found_tickers = []
         for w in words:
@@ -432,8 +417,8 @@ def process_universal_chatbot(user_query: str):
                     f"| **Current Price** | ₹{p1:,.2f} | ₹{p2:,.2f} |\n"
                     f"| **P/E Ratio** | {pe1} | {pe2} |\n"
                     f"| **Return on Equity (ROE)** | {roe1:.1f}% | {roe2:.1f}% |\n\n"
-                    f"**Summary:** If seeking value with lower valuation, check P/E relative to sector. "
-                    f"If seeking fundamental compounding efficiency, the company with higher ROE ({found_tickers[0] if roe1 > roe2 else found_tickers[1]}) holds higher quality capital allocation."
+                    f"**Summary:** Check P/E relative to sector valuation for value. "
+                    f"For compounding quality, the company with higher ROE ({found_tickers[0] if roe1 > roe2 else found_tickers[1]}) reflects superior capital allocation."
                 )
             except Exception:
                 pass
@@ -442,18 +427,18 @@ def process_universal_chatbot(user_query: str):
     if "RSI" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
         return (
             "### 📊 What is RSI (Relative Strength Index)?\n\n"
-            "RSI measures the speed and magnitude of price changes on a scale from 0 to 100:\n"
-            "- **Above 70:** **Overbought** (High risk of pullback or profit booking).\n"
-            "- **Below 30:** **Oversold** (High probability of technical bounce/rebound).\n"
-            "- **40–60:** Neutral trend / consolidation."
+            "RSI measures price change speed and magnitude on a scale of 0 to 100:\n"
+            "- **Above 70:** **Overbought** (Elevated risk of pullback or consolidation).\n"
+            "- **Below 30:** **Oversold** (High probability of technical bounce).\n"
+            "- **40–60:** Neutral trend."
         )
 
     if ("PE RATIO" in upper or "P/E" in upper) and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
         return (
             "### 🏛️ What is the P/E Ratio?\n\n"
-            "The Price-to-Earnings (P/E) ratio shows how much you pay for every ₹1 of profit:\n"
+            "The Price-to-Earnings (P/E) ratio shows how much you pay per ₹1 of profit:\n"
             "- **Formula:** Current Stock Price ÷ Earnings Per Share (EPS).\n"
-            "- **Low P/E:** Potential value opportunity (or company facing structural headwinds).\n"
+            "- **Low P/E:** Potential value opportunity (or company facing headwinds).\n"
             "- **High P/E:** Market expects high future earnings growth.\n\n"
             "*Always compare a stock's P/E with peers in the same industry.*"
         )
@@ -461,38 +446,36 @@ def process_universal_chatbot(user_query: str):
     if "STOP LOSS" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
         return (
             "### 🛡️ What is a Stop-Loss (SL)?\n\n"
-            "A Stop-Loss is an automatic risk-management order placed with your broker to sell a stock if the price falls to a specified floor. "
-            "It caps maximum losses on a trade, protecting capital from sudden intraday declines."
+            "A Stop-Loss is an automatic risk-management order that triggers a sale if the price drops to a chosen level, capping trade losses and preserving capital."
         )
 
-    if "MARKET CAP" in upper and any(k in upper for k in ["WHAT", "HOW", "MEAN"]):
-        return (
-            "### 🏢 What is Market Capitalization?\n\n"
-            "Market Cap is the total value of a company's outstanding shares:\n"
-            "- **Large Cap:** Top 100 companies by size (stable, lower volatility).\n"
-            "- **Mid Cap:** 101st to 250th companies (higher growth potential, moderate risk).\n"
-            "- **Small Cap:** 251st and beyond (high growth potential, high volatility)."
+    # --- CATEGORY D: SPECIFIC COMPANY QUERIES (DIRECT TICKER & TYPO HANDLING) ---
+    words = [w.strip(" ?.,!").upper() for w in raw_query.split()]
+    direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
+
+    if direct_symbol:
+        ticker_symbol = f"{direct_symbol}.NS"
+        company_name = direct_symbol
+    else:
+        clean_target = re.sub(
+            r"(?i)\b(analiyse|analyse|analyze|analysis|check|review|details|will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how)\b",
+            " ",
+            raw_query
         )
+        search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
 
-    # --- CATEGORY D: SPECIFIC COMPANY QUERIES ---
-    clean_target = re.sub(
-        r"(?i)\b(will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how|analysis)\b",
-        " ",
-        raw_query
-    )
-    search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
+        if not search_term or len(search_term) < 2:
+            return (
+                "I'm your Indian Equities Assistant! You can ask me:\n"
+                "- *'Analyse INFY'*\n"
+                "- *'Which share is best to buy now?'*\n"
+                "- *'Will Infosys price hike in next few days?'*\n"
+                "- *'Is Tata Motors safe to hold for long term?'*\n"
+                "- *'Compare TCS vs Infosys'*"
+            )
 
-    if not search_term or len(search_term) < 2:
-        return (
-            "I'm your Indian Equities Assistant! You can ask me:\n"
-            "- *'Which share is best to buy now?'*\n"
-            "- *'Will Infosys price hike in next few days?'*\n"
-            "- *'Is Tata Motors safe to hold for long term?'*\n"
-            "- *'Compare TCS vs Infosys'*\n"
-            "- *'What is RSI and how does it work?'*"
-        )
+        ticker_symbol, company_name = resolve_ticker_online(search_term)
 
-    ticker_symbol, company_name = resolve_ticker_online(search_term)
     if not ticker_symbol:
         return (
             f"I searched online for **'{search_term}'** but could not find a matching equity ticker on NSE/BSE. "
@@ -517,7 +500,7 @@ def process_universal_chatbot(user_query: str):
             bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
 
             rsi_desc = (
-                f"{rsi:.1f} (Overbought — elevated risk of pause)" if rsi > 70
+                f"{rsi:.1f} (Overbought — risk of pause)" if rsi > 70
                 else f"{rsi:.1f} (Oversold — high rebound probability)" if rsi < 35
                 else f"{rsi:.1f} (Neutral momentum)"
             )
@@ -569,7 +552,7 @@ def process_universal_chatbot(user_query: str):
                 f"- **50-Day SMA:** ₹{sma_50:.2f}\n"
                 f"- **P/E Ratio:** {pe}\n\n"
                 f"You can ask:\n"
-                f"- *'Will {company_name} price increase in the next few days?'*\n"
+                f"- *'Will {company_name} price hike in the next few days?'*\n"
                 f"- *'Is {company_name} fundamentally safe for long-term holding?'*"
             )
     except Exception as e:
@@ -700,7 +683,7 @@ with tab_chat:
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your Indian Equities Assistant. Ask me anything, such as:\n- *'Which share is best to buy now?'*\n- *'Will Infosys price hike in next few days?'*\n- *'Is Tata Motors safe to hold?'*\n- *'Compare TCS vs Infosys'*\n- *'What is RSI and how do I use it?'*"}
+            {"role": "assistant", "content": "Hello! I am your Indian Equities Assistant. Ask me anything, such as:\n- *'Analyse INFY'*\n- *'Which share is best to buy now?'*\n- *'Will Infosys price hike in next few days?'*\n- *'Is Tata Motors safe to hold?'*\n- *'Compare TCS vs Infosys'*\n- *'What is RSI and how do I use it?'*"}
         ]
 
     for msg in st.session_state.chat_history:
@@ -936,10 +919,9 @@ with tab_deepdive:
                 except Exception as e:
                     st.error(f"Error analyzing ticker: {e}")
 
-# --- MANDATORY REGULATORY DISCLAIMER ---
+# --- MANDATORY REGULATORY & EDUCATIONAL DISCLAIMER ---
 st.markdown("---")
 st.warning(
     "⚠️ **Disclaimer:** This tool is purely for educational purposes. "
-    "Grey Market Premium (GMP) is an unofficial, unregulated metric. "
-    "Please consult with a SEBI-registered advisor before executing buy or sell trades."
+    "Please consult with a SEBI-registered advisor before buying or selling any securities."
 )
