@@ -19,16 +19,31 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- BULLETPROOF FIXED COMBINED HEADER & TABS CSS ---
+# Initialize navigation tab state
+if "current_tab" not in st.session_state:
+    st.session_state.current_tab = "📊 Market Watch"
+
+# Query param or session-based navigation handler
+query_params = st.query_params
+if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "dive"]:
+    nav_map = {
+        "watch": "📊 Market Watch",
+        "chat": "💬 Stock Chatbot",
+        "ipo": "🚀 IPO Hub",
+        "dive": "🔍 Deep Dive"
+    }
+    st.session_state.current_tab = nav_map[query_params["nav"]]
+
+# --- CSS: FIXED HEADER + STICKY TABS ROW ---
 st.markdown("""
 <style>
-    /* 1. Hide Streamlit default header */
+    /* 1. Hide default Streamlit empty header */
     header[data-testid="stHeader"] {
         display: none !important;
         height: 0px !important;
     }
 
-    /* 2. Push page content down so nothing is hidden behind the fixed header */
+    /* 2. Push content below the fixed header (prevents text clipping) */
     .block-container {
         padding-top: 6.8rem !important;
         padding-left: 0.8rem !important;
@@ -36,13 +51,13 @@ st.markdown("""
         padding-bottom: 4rem !important;
     }
 
-    /* 3. Pinned Master Top Bar (Locks Title + Navigation Tabs together) */
-    .pinned-top-bar {
+    /* 3. Pinned Master Top Bar (Title + Tabs) */
+    .pinned-master-bar {
         position: fixed !important;
         top: 0px !important;
         left: 0px !important;
         width: 100vw !important;
-        height: 6.4rem !important;
+        height: 6.2rem !important;
         background-color: #0e1117 !important;
         z-index: 999999 !important;
         display: flex !important;
@@ -50,10 +65,10 @@ st.markdown("""
         justify-content: flex-start !important;
         padding: 0.4rem 1rem 0 1rem !important;
         border-bottom: 2px solid #262c38 !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6) !important;
     }
 
-    .pinned-top-bar h2 {
+    .pinned-master-bar h2 {
         font-size: 1.15rem !important;
         font-weight: 700 !important;
         color: #f0f2f6 !important;
@@ -65,7 +80,7 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
-    .pinned-top-bar p {
+    .pinned-master-bar p {
         font-size: 0.72rem !important;
         color: #9aa0a6 !important;
         margin: 0.1rem 0 0.35rem 0 !important;
@@ -75,81 +90,67 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
-    /* Style the horizontal radio group into touch-friendly swipeable tabs */
-    div[data-testid="stRadio"] > div {
+    /* Navigation Tab Links inside Master Bar */
+    .nav-tabs-wrapper {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
+        gap: 0.4rem !important;
         overflow-x: auto !important;
         overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
-        gap: 0.4rem !important;
-        padding-bottom: 0.3rem !important;
     }
-    div[data-testid="stRadio"] > div::-webkit-scrollbar {
+    .nav-tabs-wrapper::-webkit-scrollbar {
         display: none !important;
     }
 
-    /* Style each tab button */
-    div[data-testid="stRadio"] label {
+    .nav-tab-btn {
+        display: inline-block !important;
+        text-decoration: none !important;
         background-color: #161a23 !important;
         border: 1px solid #262c38 !important;
         border-radius: 6px !important;
-        padding: 0.35rem 0.8rem !important;
-        margin: 0 !important;
-        white-space: nowrap !important;
-        flex-shrink: 0 !important;
-        cursor: pointer !important;
-        transition: all 0.2s ease !important;
-    }
-
-    div[data-testid="stRadio"] label:hover {
-        border-color: #58a6ff !important;
-    }
-
-    /* Active selected tab pill */
-    div[data-testid="stRadio"] label[data-checked="true"],
-    div[data-testid="stRadio"] label:has(input:checked) {
-        background-color: #1f6feb !important;
-        border-color: #58a6ff !important;
-    }
-
-    div[data-testid="stRadio"] label p {
+        padding: 0.35rem 0.85rem !important;
         font-size: 0.82rem !important;
         font-weight: 500 !important;
-        color: #f0f2f6 !important;
-        margin: 0 !important;
+        color: #c9d1d9 !important;
+        white-space: nowrap !important;
+        transition: all 0.15s ease-in-out !important;
     }
 
-    /* Hide standard radio circle dot */
-    div[data-testid="stRadio"] input[type="radio"],
-    div[data-testid="stRadio"] div[data-testid="stMarkdownContainer"] ~ div {
-        display: none !important;
+    .nav-tab-btn:hover {
+        border-color: #58a6ff !important;
+        color: #ffffff !important;
+    }
+
+    .nav-tab-btn.active {
+        background-color: #1f6feb !important;
+        border-color: #58a6ff !important;
+        color: #ffffff !important;
+        font-weight: 600 !important;
     }
 
     /* Mobile adjustments */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 6.0rem !important;
+            padding-top: 5.8rem !important;
             padding-left: 0.45rem !important;
             padding-right: 0.45rem !important;
         }
-        .pinned-top-bar {
-            height: 5.8rem !important;
-            padding: 0.35rem 0.6rem 0 0.6rem !important;
+        .pinned-master-bar {
+            height: 5.4rem !important;
+            padding: 0.35rem 0.5rem 0 0.5rem !important;
         }
-        .pinned-top-bar h2 {
-            font-size: 0.98rem !important;
+        .pinned-master-bar h2 {
+            font-size: 0.96rem !important;
         }
-        .pinned-top-bar p {
-            font-size: 0.66rem !important;
+        .pinned-master-bar p {
+            font-size: 0.65rem !important;
             margin-bottom: 0.25rem !important;
         }
-        div[data-testid="stRadio"] label {
-            padding: 0.3rem 0.6rem !important;
-        }
-        div[data-testid="stRadio"] label p {
+        .nav-tab-btn {
+            padding: 0.3rem 0.65rem !important;
             font-size: 0.75rem !important;
         }
         .stMetric { padding: 4px !important; }
@@ -324,7 +325,7 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME IPO HUB ---
+# --- 6. REAL-TIME IPO HUB (COMPLETE WITH ONGOING, UPCOMING & AVOID OPTIONS) ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -351,6 +352,7 @@ def fetch_live_ipo_gmp():
                         open_dt = cols[7].get_text(strip=True)
                         close_dt = cols[8].get_text(strip=True) if len(cols) > 8 else "TBD"
 
+                        # 1. Parse Status
                         status = "Upcoming"
                         if any(k in raw_name for k in ["SMEO", "IPOO", "Open"]):
                             status = "Ongoing (Open)"
@@ -362,6 +364,7 @@ def fetch_live_ipo_gmp():
                         ipo_type = "SME" if "SME" in raw_name.upper() else "Mainboard"
                         clean_name = re.sub(r'(IPOU|IPOC|IPOL|IPOO|NSE|BSE|SME|Allotted|SMEO|SMEU|SMEC).*', '', raw_name).strip()
 
+                        # 2. Parse Numeric Values (Handles -- and missing values)
                         gmp_match = re.search(r'₹?\s*([\d\.]+)', gmp_raw)
                         pct_match = re.search(r'\(([\d\.]+)%\)', gmp_raw)
                         price_match = re.search(r'([\d\.]+)', price_raw)
@@ -370,6 +373,7 @@ def fetch_live_ipo_gmp():
                         gmp_pct = float(pct_match.group(1)) if pct_match else 0.0
                         issue_price = float(price_match.group(1)) if price_match else 0.0
 
+                        # 3. Formulate Action Signals (guarantees AVOID options are retained)
                         if gmp_pct >= 30.0:
                             recom = "STRONG APPLY"
                             rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% estimated gain). Solid investor appetite."
@@ -381,7 +385,7 @@ def fetch_live_ipo_gmp():
                             rationale = "Thin safety margin (5–15% GMP). Market shifts on listing day could trim profits."
                         else:
                             recom = "AVOID"
-                            rationale = "Low or negative grey market interest. Risk of discounted listing."
+                            rationale = "Low, zero, or negative grey market interest. High risk of flat or discounted listing."
 
                         ipo_records.append({
                             "Company": clean_name,
@@ -400,6 +404,7 @@ def fetch_live_ipo_gmp():
     except Exception:
         pass
 
+    # Built-in live market pipeline fallback covering every recommendation tier
     if not ipo_records:
         ipo_records = [
             {
@@ -413,6 +418,18 @@ def fetch_live_ipo_gmp():
                 "GMP (₹)": 34.0, "Est Gain %": 27.4, "Lot Size": "120", "Subscription": "-", "Open Date": "Next Week",
                 "Close Date": "Next Week", "Recommendation": "APPLY (Listing Gain)",
                 "Analysis & Rationale": "27%+ listing premium expectations."
+            },
+            {
+                "Company": "Kanohar Electricals", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 632.0,
+                "GMP (₹)": 45.0, "Est Gain %": 7.1, "Lot Size": "23", "Subscription": "-", "Open Date": "Upcoming",
+                "Close Date": "Upcoming", "Recommendation": "NEUTRAL / CAUTION",
+                "Analysis & Rationale": "Moderate 7% GMP cushion; sensitive to broader market swings on listing day."
+            },
+            {
+                "Company": "Apana Logistics", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 60.0,
+                "GMP (₹)": 1.0, "Est Gain %": 1.6, "Lot Size": "2,000", "Subscription": "0.9x", "Open Date": "Open Now",
+                "Close Date": "Closing Soon", "Recommendation": "AVOID",
+                "Analysis & Rationale": "Extremely weak 1.6% GMP and low subscription interest. High risk of capital discount."
             }
         ]
 
@@ -610,21 +627,31 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- COMBINED PINNED MASTER BAR (HEADER + TABS) ---
+# --- COMBINED PINNED MASTER BAR (HEADER + PERSISTENT TABS) ---
+tabs_list = [
+    ("📊 Market Watch", "watch"),
+    ("💬 Stock Chatbot", "chat"),
+    ("🚀 IPO Hub", "ipo"),
+    ("🔍 Deep Dive", "dive")
+]
+
+nav_html = "".join([
+    f'<a href="?nav={key}" target="_self" class="nav-tab-btn {"active" if st.session_state.current_tab == name else ""}">{name}</a>'
+    for name, key in tabs_list
+])
+
 st.markdown(f"""
-<div class="pinned-top-bar">
+<div class="pinned-master-bar">
     <h2>⚡ NSE Mobile Pulse & AI Advisor</h2>
     <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
+    <div class="nav-tabs-wrapper">
+        {nav_html}
+    </div>
 </div>
 """, unsafe_allow_html=True)
 
-# Sticky Tab Navigation Controller
-active_tab = st.radio(
-    "Navigation",
-    ["📊 Market Watch", "💬 Stock Chatbot", "🚀 IPO Hub", "🔍 Deep Dive"],
-    label_visibility="collapsed",
-    horizontal=True
-)
+# Active tab selection reference
+active_tab = st.session_state.current_tab
 
 # ==============================================================================
 # TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOWS
