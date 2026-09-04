@@ -6,7 +6,8 @@ import feedparser
 import requests
 import io
 import re
-from datetime import datetime
+from datetime import datetime, time
+import pytz
 from bs4 import BeautifulSoup
 from textblob import TextBlob
 
@@ -17,7 +18,26 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- 1. DYNAMIC DATA SOURCE: ALL NSE LISTED STOCKS ---
+IST = pytz.timezone("Asia/Kolkata")
+
+# --- 1. NSE TRADING SCHEDULE & TIME ENGINE ---
+def get_market_status():
+    """
+    Evaluates whether the Indian Equity Market is open or closed based on IST.
+    Normal trading hours: Monday to Friday, 09:15 to 15:30 IST.
+    """
+    now_ist = datetime.now(IST)
+    weekday = now_ist.weekday()  # 0=Monday, 6=Sunday
+    current_time = now_ist.time()
+
+    is_open = False
+    if weekday < 5:  # Monday to Friday
+        if time(9, 15) <= current_time <= time(15, 30):
+            is_open = True
+
+    return is_open, now_ist
+
+# --- 2. DYNAMIC DATA SOURCE: ALL NSE LISTED STOCKS ---
 @st.cache_data(ttl=86400)
 def get_all_nse_symbols():
     url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
@@ -47,15 +67,16 @@ def get_all_nse_symbols():
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
 
-# --- 2. LIVE GAINERS & LOSERS DATA FETCH ---
+# --- 3. LIVE GAINERS & LOSERS DATA FETCH ---
 @st.cache_data(ttl=15)
 def get_live_market_data(universe):
     scan_universe = universe[:50]
     tickers = [f"{s}.NS" for s in scan_universe]
+    last_session_date_str = ""
     try:
         raw = yf.download(tickers, period="5d", interval="1d", progress=False)
         if raw.empty:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), last_session_date_str
 
         if isinstance(raw.columns, pd.MultiIndex):
             if "Close" in raw.columns.levels[0]:
@@ -66,6 +87,10 @@ def get_live_market_data(universe):
                 data = raw.iloc[:, :len(scan_universe)]
         else:
             data = raw.get("Close", raw)
+
+        # Detect the latest trading day from the index
+        if not data.empty and hasattr(data.index, "strftime"):
+            last_session_date_str = data.index[-1].strftime("%d %b %Y")
 
         records = []
         for symbol in scan_universe:
@@ -90,16 +115,16 @@ def get_live_market_data(universe):
                 })
 
         if not records:
-            return pd.DataFrame(), pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), last_session_date_str
 
         df = pd.DataFrame(records)
         gainers = df.sort_values(by="% Change", ascending=False).head(10).reset_index(drop=True)
         losers = df.sort_values(by="% Change", ascending=True).head(10).reset_index(drop=True)
-        return gainers, losers
+        return gainers, losers, last_session_date_str
     except Exception:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), last_session_date_str
 
-# --- 3. TOP 3 52-WEEK LOW PICKS SCREENER (WITH SL & TARGET) ---
+# --- 4. TOP 3 52-WEEK LOW PICKS SCREENER ---
 @st.cache_data(ttl=300)
 def screen_52w_low_strong_picks(universe):
     results = []
@@ -147,7 +172,7 @@ def screen_52w_low_strong_picks(universe):
         return pd.DataFrame(results).sort_values(by="Dist %").head(3)
     return pd.DataFrame()
 
-# --- 4. CLOUD-SAFE IPO & GMP DATA FETCH ---
+# --- 5. CLOUD-SAFE IPO & GMP DATA FETCH ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -235,7 +260,7 @@ def fetch_live_ipo_gmp():
         ]
     return pd.DataFrame(ipo_records)
 
-# --- 5. CLOUD-SAFE NEWS FETCHING ---
+# --- 6. CLOUD-SAFE NEWS FETCHING ---
 def fetch_cloud_safe_news(ticker_obj, symbol):
     articles = []
     total_polarity = 0
@@ -282,26 +307,40 @@ st.title("⚡ NSE Real-Time Market Pulse & Decision Engine")
 st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Listed Equities • Live Movers • Algorithmic Value Screener • IPO Hub")
 
 tab_movers, tab_ipos, tab_deepdive = st.tabs([
-    "📊 Market Movers & Top Recommendations",
+    "📊 Market Movers & Recommendations",
     "🚀 Live IPOs & GMP Hub (Mainboard + SME)",
     "🔍 Deep-Dive Stock Analysis"
 ])
 
 # ==============================================================================
-# TAB 1: LIVE MOVERS, TOP 5 PICKS & TOP 3 52-WEEK LOWS
+# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOWS
 # ==============================================================================
 with tab_movers:
-    @st.fragment(run_every=20)
-    def render_live_market_dashboard():
-        gainers_df, losers_df = get_live_market_data(ALL_NSE_STOCKS)
-        now_time = datetime.now().strftime("%H:%M:%S")
+    is_market_open, now_ist = get_market_status()
 
-        st.subheader("📊 Today's Market Movers")
-        st.caption(f"🔄 Auto-updating in background every 20s | Last tick: **{now_time}**")
+    # Reusable renderer for Market Watch
+    def render_movers_content():
+        gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
+        is_open, current_time_ist = get_market_status()
+        time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
-        # 1. TOP 5 STRATEGIC PICKS
+        # 1. DYNAMIC HEADER BASED ON MARKET TIMINGS & HOLIDAYS
+        if is_open:
+            st.subheader("🟢 Today's Live Market Movers (Market Open)")
+            st.caption(f"🔄 Auto-updating every 20s | Time: **{time_str}**")
+        else:
+            header_date = f" ({last_date})" if last_date else ""
+            st.subheader(f"🔴 Top Gainers & Losers — Last Trading Session{header_date}")
+            st.caption(f"Market Closed (Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri) | Current Time: **{time_str}**")
+
+        # 2. STRATEGIC PICKS ENGINE (INTRADAY CALL REMOVED AFTER TRADING HOURS)
         st.markdown("---")
-        st.subheader("⭐ Top 5 Algorithmic Recommendations (From Daily Movers)")
+        if is_open:
+            st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
+        else:
+            st.subheader("⭐ Top Recommendations for Next Session (Short & Long Term)")
+            st.info("ℹ️ **Note:** Intraday calls are hidden because the market session has ended. Only swing and positional setups are shown.")
+
         if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
             top_g1 = gainers_df.iloc[0]["Stock"]
             top_g2 = gainers_df.iloc[1]["Stock"]
@@ -309,20 +348,26 @@ with tab_movers:
             top_l2 = losers_df.iloc[1]["Stock"]
             top_l3 = losers_df.iloc[2]["Stock"]
 
-            picks = [
-                {
+            all_picks = []
+
+            # ONLY include Intraday call when the live market is open
+            if is_open:
+                all_picks.append({
                     "Stock": top_g1,
                     "Horizon": "Intraday Momentum",
                     "Action": "BUY ON DIP",
                     "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-                    "Why": "Strong volume participation and positive price discovery near day high."
-                },
+                    "Why": "Strong volume participation and positive price discovery near day high. Ride momentum toward VWAP."
+                })
+
+            # Positional and Long-Term setups shown in all market states
+            all_picks.extend([
                 {
                     "Stock": top_g2,
                     "Horizon": "Short-Term Swing (1–4 Wks)",
                     "Action": "BUY (Breakout)",
                     "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)",
-                    "Why": "Technical breakout clearing immediate resistance levels."
+                    "Why": "Technical breakout clearing immediate resistance levels on daily charts."
                 },
                 {
                     "Stock": top_l1,
@@ -343,12 +388,12 @@ with tab_movers:
                     "Horizon": "Long-Term Core (12–24 Mos)",
                     "Action": "BUY (Compounder)",
                     "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)",
-                    "Why": "Macro pullback on fundamentally sound asset with strong return ratios."
+                    "Why": "Macro pullback on fundamentally sound asset with strong capital return ratios."
                 }
-            ]
+            ])
 
-            p_cols = st.columns(5)
-            for idx, p in enumerate(picks):
+            p_cols = st.columns(len(all_picks))
+            for idx, p in enumerate(all_picks):
                 with p_cols[idx]:
                     with st.container(border=True):
                         st.markdown(f"### {p['Stock']}")
@@ -357,13 +402,13 @@ with tab_movers:
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
         else:
-            st.info("Gathering live market data to compute strategic recommendations...")
+            st.info("Gathering market data to compute strategic recommendations...")
 
-        # 2. TABLES OF TOP GAINERS & LOSERS
+        # 3. GAINERS / LOSERS TABLES
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
-            st.markdown("##### 🟢 Live Top Gainers")
+            st.markdown("##### 🟢 Top Gainers")
             if not gainers_df.empty:
                 st.dataframe(
                     gainers_df.style.format({
@@ -375,10 +420,10 @@ with tab_movers:
                     hide_index=True
                 )
             else:
-                st.info("Loading live gainer quotes...")
+                st.info("Loading gainer quotes...")
 
         with l_col:
-            st.markdown("##### 🔴 Live Top Losers")
+            st.markdown("##### 🔴 Top Losers")
             if not losers_df.empty:
                 st.dataframe(
                     losers_df.style.format({
@@ -390,11 +435,18 @@ with tab_movers:
                     hide_index=True
                 )
             else:
-                st.info("Loading live loser quotes...")
+                st.info("Loading loser quotes...")
 
-    render_live_market_dashboard()
+    # Only run background auto-refreshes when the market is actively open
+    if is_market_open:
+        @st.fragment(run_every=20)
+        def live_fragment():
+            render_movers_content()
+        live_fragment()
+    else:
+        render_movers_content()
 
-    # 3. TOP 3 52-WEEK LOW VALUE SECTION
+    # 4. TOP 3 52-WEEK LOW VALUE SECTION
     st.markdown("---")
     st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
     st.caption("Filters for low debt, solid return profile (ROE), and oversold base with calculated Stop-Loss and Target levels.")
