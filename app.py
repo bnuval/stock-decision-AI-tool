@@ -19,115 +19,96 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- PINNED STICKY HEADER & MOBILE VIEWPORT FIX ---
+# --- PINNED STICKY HEADER & TABS CSS ---
 st.markdown("""
 <style>
-    /* 1. Prevent default Streamlit padding collisions */
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+
     .block-container {
-        padding-top: 6.8rem !important;
-        padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
-        padding-bottom: 3.5rem !important;
+        padding-top: 0.4rem !important;
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+        padding-bottom: 4rem !important;
     }
 
-    /* 2. Lock Header firmly to Viewport Top */
-    .pinned-header {
-        position: fixed !important;
-        top: 0 !important;
-        left: 0 !important;
-        width: 100% !important;
-        height: 3.6rem !important;
-        background-color: #0e1117 !important;
-        color: #ffffff !important;
-        z-index: 999999 !important;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        padding: 0 1.2rem !important;
-        border-bottom: 1px solid #262730 !important;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45) !important;
+    .sticky-top-box {
+        position: sticky;
+        top: 0px;
+        z-index: 99999;
+        background: #0e1117;
+        padding: 0.4rem 0.2rem 0.2rem 0.2rem;
+        margin-bottom: 0px;
     }
 
-    .pinned-header h1 {
-        font-size: 1.15rem !important;
+    .sticky-top-box h2 {
+        font-size: 1.22rem !important;
         font-weight: 700 !important;
-        line-height: 1.2 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
         color: #f0f2f6 !important;
-    }
-
-    .pinned-header p {
-        font-size: 0.72rem !important;
-        color: #9aa0a6 !important;
         margin: 0 !important;
         padding: 0 !important;
-        white-space: nowrap !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
+        line-height: 1.2 !important;
     }
 
-    /* 3. Pin Streamlit's native Tab Bar right beneath the Fixed Header */
+    .sticky-top-box p {
+        font-size: 0.76rem !important;
+        color: #9aa0a6 !important;
+        margin: 0.15rem 0 0 0 !important;
+        padding: 0 !important;
+    }
+
     div[data-baseweb="tab-list"] {
-        position: fixed !important;
+        position: sticky !important;
         top: 3.6rem !important;
-        left: 0 !important;
-        width: 100% !important;
-        height: 2.8rem !important;
-        background-color: #161a24 !important;
-        z-index: 999998 !important;
+        z-index: 99998 !important;
+        background: #0e1117 !important;
+        padding: 0.35rem 0 !important;
+        margin-bottom: 0.75rem !important;
+        border-bottom: 2px solid #262730 !important;
         display: flex !important;
-        flex-direction: row !important;
         flex-wrap: nowrap !important;
-        align-items: center !important;
-        padding: 0 0.8rem !important;
         overflow-x: auto !important;
-        overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
-        border-bottom: 2px solid #262730 !important;
     }
+
     div[data-baseweb="tab-list"]::-webkit-scrollbar {
         display: none !important;
     }
 
-    /* Mobile tab buttons */
     div[data-baseweb="tab-list"] button {
         white-space: nowrap !important;
         flex-shrink: 0 !important;
-        font-size: 0.85rem !important;
-        padding: 0.4rem 0.85rem !important;
-        color: #d1d5db !important;
+        font-size: 0.88rem !important;
+        padding: 0.45rem 0.85rem !important;
+        color: #c9d1d9 !important;
     }
 
-    /* Responsive Mobile Screen Sizing */
+    div[data-baseweb="tab-list"] button[aria-selected="true"] {
+        color: #58a6ff !important;
+        font-weight: 600 !important;
+    }
+
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 6.4rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
+            padding-top: 0.2rem !important;
+            padding-left: 0.4rem !important;
+            padding-right: 0.4rem !important;
         }
-        .pinned-header {
-            height: 3.4rem !important;
-            padding: 0 0.8rem !important;
-        }
-        .pinned-header h1 {
+        .sticky-top-box h2 {
             font-size: 1.02rem !important;
         }
-        .pinned-header p {
+        .sticky-top-box p {
             font-size: 0.68rem !important;
         }
         div[data-baseweb="tab-list"] {
-            top: 3.4rem !important;
-            height: 2.6rem !important;
-            padding: 0 0.4rem !important;
+            top: 3.1rem !important;
+            padding: 0.2rem 0 !important;
         }
         div[data-baseweb="tab-list"] button {
             font-size: 0.78rem !important;
-            padding: 0.35rem 0.65rem !important;
+            padding: 0.35rem 0.6rem !important;
         }
         .stMetric { padding: 4px !important; }
         .stMetric label { font-size: 0.72rem !important; }
@@ -142,6 +123,7 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # --- 1. MARKET SCHEDULE ENGINE ---
 def get_market_status():
+    """Checks whether regular NSE market hours (09:15 to 15:30 IST, Mon-Fri) are active."""
     now_ist = datetime.now(IST)
     weekday = now_ist.weekday()
     current_time = now_ist.time()
@@ -434,7 +416,6 @@ def process_universal_chatbot(user_query: str):
     raw_query = user_query.strip()
     upper = raw_query.upper()
 
-    # Broad investment questions
     if any(k in upper for k in [
         "WHICH SHARE IS BEST TO BUY", "WHICH STOCK IS BEST TO BUY", "WHAT TO BUY NOW",
         "WHICH SHARE TO BUY TODAY", "BEST SHARE TO BUY NOW", "BEST STOCK TO BUY",
@@ -588,15 +569,15 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- FIXED TOP PAGE HEADER ---
+# --- STICKY TOP TITLE BLOCK ---
 st.markdown(f"""
-<div class="pinned-header">
-    <h1>⚡ NSE Mobile Pulse & AI Advisor</h1>
+<div class="sticky-top-box">
+    <h2>⚡ NSE Mobile Pulse & AI Advisor</h2>
     <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- PINNED STICKY TABS ---
+# --- STICKY TABS ROW ---
 tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
     "📊 Market Watch",
     "💬 Stock Chatbot",
@@ -610,27 +591,42 @@ tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
 with tab_movers:
     is_market_open, now_ist = get_market_status()
 
-    def render_movers_content():
-        gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
+    # Define the fragment with conditional auto-refresh:
+    # 20 seconds during live market hours, None (manual only) when market is closed
+    fragment_interval = 20 if is_market_open else None
+
+    @st.fragment(run_every=fragment_interval)
+    def render_movers_dashboard():
         is_open, current_time_ist = get_market_status()
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
-        # 1. DATE-AWARE HEADER
+        # 1. Market Status Header & Manual Refresh Button
         if is_open:
             st.subheader("🟢 Today's Live Market Movers (Market Open)")
-            st.caption(f"🔄 Auto-updating every 20s | Time: **{time_str}**")
+            st.caption(f"🔄 Auto-updating every 20s | Clock: **{time_str}**")
         else:
-            header_date = f" ({last_date})" if last_date else ""
-            st.subheader(f"🔴 Top Movers — Last Trading Session{header_date}")
-            st.caption(f"Market Closed (Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri) | Current Time: **{time_str}**")
+            header_col, btn_col = st.columns([3, 1.2])
+            with header_col:
+                st.subheader("🔴 Market Watch (Session Closed)")
+                st.caption(f"Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri | Checked: **{time_str}**")
+            with btn_col:
+                if st.button("🔄 Refresh Data", use_container_width=True, help="Click to pull latest quotes"):
+                    get_live_market_data.clear()
+                    screen_52w_low_strong_picks.clear()
 
-        # 2. STRATEGIC RECOMMENDATIONS
+        # Fetch Data
+        gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
+
+        if not is_open and last_date:
+            st.info(f"📅 Data represents the last completed exchange session: **{last_date}**")
+
+        # 2. Strategic Recommendations
         st.markdown("---")
         if is_open:
             st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
         else:
             st.subheader("⭐ Top Recommendations for Next Session (Short & Long Term)")
-            st.info("ℹ️ Intraday calls are hidden because the market session has closed. Showing swing and positional setups only.")
+            st.caption("Intraday momentum calls are hidden because the market session is closed.")
 
         if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
             top_g1 = gainers_df.iloc[0]["Stock"]
@@ -664,7 +660,7 @@ with tab_movers:
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
 
-        # 3. MOVERS TABLES
+        # 3. Movers Tables
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
@@ -676,38 +672,32 @@ with tab_movers:
             if not losers_df.empty:
                 st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
-    if is_market_open:
-        @st.fragment(run_every=20)
-        def live_fragment():
-            render_movers_content()
-        live_fragment()
-    else:
-        render_movers_content()
+        # 4. Top 3 52-Week Low Picks
+        st.markdown("---")
+        st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
+        st.caption("Zero/low debt, solid balance sheet, and closest to 52-week support with calculated Stop-Loss & Target levels.")
 
-    # 4. TOP 3 52-WEEK LOW PICKS
-    st.markdown("---")
-    st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
-    st.caption("Zero/low debt, solid balance sheet, and closest to 52-week support with calculated Stop-Loss & Target levels.")
+        low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+        if not low_screener_df.empty:
+            cols = st.columns(len(low_screener_df))
+            for i, (_, row) in enumerate(low_screener_df.iterrows()):
+                with cols[i]:
+                    with st.container(border=True):
+                        st.markdown(f"### 💎 {row['Stock']}")
+                        st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% from 52W Low", delta_color="inverse")
+                        st.write(f"**52W Low:** ₹{row['52W Low']} | **52W High:** ₹{row['52W High']}")
+                        st.markdown("---")
+                        st.markdown("**⚡ Short-Term (1–4 Wks):**")
+                        st.write(f"- **Buy Range:** ₹{row['Price']}")
+                        st.write(f"- **Stop-Loss:** ₹{row['Short SL']}")
+                        st.write(f"- **Target:** ₹{row['Short Target']}")
+                        st.markdown("**🏛️ Long-Term (6–18 Mos):**")
+                        st.write(f"- **Stop-Loss:** ₹{row['Long SL']}")
+                        st.write(f"- **Target:** ₹{row['Long Target']}")
+        else:
+            st.info("Loading 52-week value candidates...")
 
-    low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
-    if not low_screener_df.empty:
-        cols = st.columns(len(low_screener_df))
-        for i, (_, row) in enumerate(low_screener_df.iterrows()):
-            with cols[i]:
-                with st.container(border=True):
-                    st.markdown(f"### 💎 {row['Stock']}")
-                    st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% from 52W Low", delta_color="inverse")
-                    st.write(f"**52W Low:** ₹{row['52W Low']} | **52W High:** ₹{row['52W High']}")
-                    st.markdown("---")
-                    st.markdown("**⚡ Short-Term (1–4 Wks):**")
-                    st.write(f"- **Buy Range:** ₹{row['Price']}")
-                    st.write(f"- **Stop-Loss:** ₹{row['Short SL']}")
-                    st.write(f"- **Target:** ₹{row['Short Target']}")
-                    st.markdown("**🏛️ Long-Term (6–18 Mos):**")
-                    st.write(f"- **Stop-Loss:** ₹{row['Long SL']}")
-                    st.write(f"- **Target:** ₹{row['Long Target']}")
-    else:
-        st.info("Loading 52-week value candidates...")
+    render_movers_dashboard()
 
 # ==============================================================================
 # TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT
