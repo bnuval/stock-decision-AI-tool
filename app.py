@@ -19,16 +19,16 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# --- BULLETPROOF FIXED STICKY HEADER & TABS CSS ---
+# --- BULLETPROOF FIXED COMBINED HEADER & TABS CSS ---
 st.markdown("""
 <style>
-    /* 1. Eliminate default Streamlit header bar to claim top pixels */
+    /* 1. Hide Streamlit default header */
     header[data-testid="stHeader"] {
         display: none !important;
         height: 0px !important;
     }
 
-    /* 2. Top padding buffer so scrollable page content never overlaps fixed headers */
+    /* 2. Push page content down so nothing is hidden behind the fixed header */
     .block-container {
         padding-top: 6.8rem !important;
         padding-left: 0.8rem !important;
@@ -36,25 +36,25 @@ st.markdown("""
         padding-bottom: 4rem !important;
     }
 
-    /* 3. Fixed Page Title Header (Layer 1) */
-    .sticky-top-header {
+    /* 3. Pinned Master Top Bar (Locks Title + Navigation Tabs together) */
+    .pinned-top-bar {
         position: fixed !important;
         top: 0px !important;
         left: 0px !important;
         width: 100vw !important;
-        height: 3.5rem !important;
+        height: 6.4rem !important;
         background-color: #0e1117 !important;
         z-index: 999999 !important;
         display: flex !important;
         flex-direction: column !important;
-        justify-content: center !important;
-        padding: 0 1rem !important;
-        border-bottom: 1px solid #1f242d !important;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5) !important;
+        justify-content: flex-start !important;
+        padding: 0.4rem 1rem 0 1rem !important;
+        border-bottom: 2px solid #262c38 !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
     }
 
-    .sticky-top-header h2 {
-        font-size: 1.18rem !important;
+    .pinned-top-bar h2 {
+        font-size: 1.15rem !important;
         font-weight: 700 !important;
         color: #f0f2f6 !important;
         margin: 0 !important;
@@ -65,81 +65,92 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
-    .sticky-top-header p {
-        font-size: 0.74rem !important;
+    .pinned-top-bar p {
+        font-size: 0.72rem !important;
         color: #9aa0a6 !important;
-        margin: 0.1rem 0 0 0 !important;
+        margin: 0.1rem 0 0.35rem 0 !important;
         padding: 0 !important;
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
     }
 
-    /* 4. Fixed Tabs Strip (Layer 2) */
-    div[data-baseweb="tab-list"] {
-        position: fixed !important;
-        top: 3.5rem !important;
-        left: 0px !important;
-        width: 100vw !important;
-        height: 2.8rem !important;
-        background-color: #161a23 !important;
-        z-index: 999998 !important;
+    /* Style the horizontal radio group into touch-friendly swipeable tabs */
+    div[data-testid="stRadio"] > div {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
-        align-items: center !important;
-        padding: 0 0.8rem !important;
         overflow-x: auto !important;
         overflow-y: hidden !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
-        border-bottom: 2px solid #262c38 !important;
-        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3) !important;
+        gap: 0.4rem !important;
+        padding-bottom: 0.3rem !important;
     }
-
-    div[data-baseweb="tab-list"]::-webkit-scrollbar {
+    div[data-testid="stRadio"] > div::-webkit-scrollbar {
         display: none !important;
     }
 
-    /* Individual Tab Buttons */
-    div[data-baseweb="tab-list"] button {
+    /* Style each tab button */
+    div[data-testid="stRadio"] label {
+        background-color: #161a23 !important;
+        border: 1px solid #262c38 !important;
+        border-radius: 6px !important;
+        padding: 0.35rem 0.8rem !important;
+        margin: 0 !important;
         white-space: nowrap !important;
         flex-shrink: 0 !important;
-        font-size: 0.86rem !important;
-        padding: 0.4rem 0.85rem !important;
-        color: #c9d1d9 !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease !important;
     }
 
-    div[data-baseweb="tab-list"] button[aria-selected="true"] {
-        color: #58a6ff !important;
-        font-weight: 600 !important;
+    div[data-testid="stRadio"] label:hover {
+        border-color: #58a6ff !important;
     }
 
-    /* Mobile screens (phones & small viewports) */
+    /* Active selected tab pill */
+    div[data-testid="stRadio"] label[data-checked="true"],
+    div[data-testid="stRadio"] label:has(input:checked) {
+        background-color: #1f6feb !important;
+        border-color: #58a6ff !important;
+    }
+
+    div[data-testid="stRadio"] label p {
+        font-size: 0.82rem !important;
+        font-weight: 500 !important;
+        color: #f0f2f6 !important;
+        margin: 0 !important;
+    }
+
+    /* Hide standard radio circle dot */
+    div[data-testid="stRadio"] input[type="radio"],
+    div[data-testid="stRadio"] div[data-testid="stMarkdownContainer"] ~ div {
+        display: none !important;
+    }
+
+    /* Mobile adjustments */
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 6.2rem !important;
+            padding-top: 6.0rem !important;
             padding-left: 0.45rem !important;
             padding-right: 0.45rem !important;
         }
-        .sticky-top-header {
-            height: 3.2rem !important;
-            padding: 0 0.65rem !important;
+        .pinned-top-bar {
+            height: 5.8rem !important;
+            padding: 0.35rem 0.6rem 0 0.6rem !important;
         }
-        .sticky-top-header h2 {
-            font-size: 1.02rem !important;
+        .pinned-top-bar h2 {
+            font-size: 0.98rem !important;
         }
-        .sticky-top-header p {
-            font-size: 0.68rem !important;
+        .pinned-top-bar p {
+            font-size: 0.66rem !important;
+            margin-bottom: 0.25rem !important;
         }
-        div[data-baseweb="tab-list"] {
-            top: 3.2rem !important;
-            height: 2.6rem !important;
-            padding: 0 0.4rem !important;
+        div[data-testid="stRadio"] label {
+            padding: 0.3rem 0.6rem !important;
         }
-        div[data-baseweb="tab-list"] button {
-            font-size: 0.78rem !important;
-            padding: 0.35rem 0.6rem !important;
+        div[data-testid="stRadio"] label p {
+            font-size: 0.75rem !important;
         }
         .stMetric { padding: 4px !important; }
         .stMetric label { font-size: 0.72rem !important; }
@@ -154,13 +165,12 @@ IST = pytz.timezone("Asia/Kolkata")
 
 # --- 1. MARKET SCHEDULE ENGINE ---
 def get_market_status():
-    """Checks whether regular NSE market hours (09:15 to 15:30 IST, Mon-Fri) are active."""
     now_ist = datetime.now(IST)
     weekday = now_ist.weekday()
     current_time = now_ist.time()
 
     is_open = False
-    if weekday < 5:
+    if weekday < 5:  # Monday to Friday
         if time(9, 15) <= current_time <= time(15, 30):
             is_open = True
     return is_open, now_ist
@@ -600,29 +610,27 @@ def process_universal_chatbot(user_query: str):
     except Exception as e:
         return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
 
-# --- FIXED TOP PAGE HEADER (LAYER 1) ---
+# --- COMBINED PINNED MASTER BAR (HEADER + TABS) ---
 st.markdown(f"""
-<div class="sticky-top-header">
+<div class="pinned-top-bar">
     <h2>⚡ NSE Mobile Pulse & AI Advisor</h2>
     <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- FIXED TABS STRIP (LAYER 2) ---
-tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
-    "📊 Market Watch",
-    "💬 Stock Chatbot",
-    "🚀 IPO Hub",
-    "🔍 Deep Dive"
-])
+# Sticky Tab Navigation Controller
+active_tab = st.radio(
+    "Navigation",
+    ["📊 Market Watch", "💬 Stock Chatbot", "🚀 IPO Hub", "🔍 Deep Dive"],
+    label_visibility="collapsed",
+    horizontal=True
+)
 
 # ==============================================================================
 # TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOWS
 # ==============================================================================
-with tab_movers:
+if active_tab == "📊 Market Watch":
     is_market_open, now_ist = get_market_status()
-
-    # 20s auto-refresh during open market; manual-only when market is closed
     fragment_interval = 20 if is_market_open else None
 
     @st.fragment(run_every=fragment_interval)
@@ -630,7 +638,6 @@ with tab_movers:
         is_open, current_time_ist = get_market_status()
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
-        # Market Status Header & Manual Refresh Button
         if is_open:
             st.subheader("🟢 Today's Live Market Movers (Market Open)")
             st.caption(f"🔄 Auto-updating every 20s | Clock: **{time_str}**")
@@ -640,7 +647,7 @@ with tab_movers:
                 st.subheader("🔴 Market Watch (Session Closed)")
                 st.caption(f"Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri | Checked: **{time_str}**")
             with btn_col:
-                if st.button("🔄 Refresh Data", use_container_width=True, help="Click to pull latest quotes"):
+                if st.button("🔄 Refresh Data", use_container_width=True):
                     get_live_market_data.clear()
                     screen_52w_low_strong_picks.clear()
 
@@ -649,7 +656,6 @@ with tab_movers:
         if not is_open and last_date:
             st.info(f"📅 Data represents the last completed exchange session: **{last_date}**")
 
-        # Strategic Recommendations
         st.markdown("---")
         if is_open:
             st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
@@ -669,12 +675,12 @@ with tab_movers:
                 all_picks.append({
                     "Stock": top_g1, "Horizon": "Intraday Momentum", "Action": "BUY ON DIP",
                     "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-                    "Why": "Strong morning participation and volume expansion. Setup favors riding trend continuation toward VWAP pullbacks."
+                    "Why": "Strong morning participation and volume expansion. Ride trend toward VWAP pullbacks."
                 })
 
             all_picks.extend([
                 {"Stock": top_g2, "Horizon": "Short-Term Swing (1–4 Wks)", "Action": "BUY (Breakout)", "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)", "Why": "Clean breakout clearing immediate resistance levels with supportive volume."},
-                {"Stock": top_l1, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Mean Reversion)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)", "Why": "Selling exhaustion near dynamic lower support bands. Favorable risk-reward for technical bounce."},
+                {"Stock": top_l1, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Mean Reversion)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)", "Why": "Selling exhaustion near dynamic lower support bands. Favorable risk-reward for bounce."},
                 {"Stock": top_l2, "Horizon": "Long-Term Value (6–12 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)", "Why": "Market drawdown on solid balance sheet, offering attractive valuation safety."},
                 {"Stock": top_l3, "Horizon": "Long-Term Core (12–24 Mos)", "Action": "BUY (Compounder)", "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)", "Why": "Macro pullback on fundamentally sound asset with strong capital return ratios."}
             ])
@@ -689,7 +695,6 @@ with tab_movers:
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
 
-        # Movers Tables
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
@@ -701,7 +706,6 @@ with tab_movers:
             if not losers_df.empty:
                 st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
-        # Top 3 52-Week Low Picks
         st.markdown("---")
         st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
         st.caption("Zero/low debt, solid balance sheet, and closest to 52-week support with calculated Stop-Loss & Target levels.")
@@ -731,7 +735,7 @@ with tab_movers:
 # ==============================================================================
 # TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT
 # ==============================================================================
-with tab_chat:
+elif active_tab == "💬 Stock Chatbot":
     st.subheader("💬 Universal AI Stock & Market Advisor")
     st.caption("Ask anything: market outlook, company analysis, trading definitions, or comparisons.")
 
@@ -758,7 +762,7 @@ with tab_chat:
 # ==============================================================================
 # TAB 3: LIVE IPOs & GMP TRACKER
 # ==============================================================================
-with tab_ipos:
+elif active_tab == "🚀 IPO Hub":
     st.subheader("🔥 Ongoing & Upcoming IPO Tracker (Mainboard & SME)")
     st.caption("Live Grey Market Premium (GMP) • Issue Dates • Action Signals")
 
@@ -816,7 +820,7 @@ with tab_ipos:
 # ==============================================================================
 # TAB 4: DEEP-DIVE SINGLE STOCK ANALYZER
 # ==============================================================================
-with tab_deepdive:
+elif active_tab == "🔍 Deep Dive":
     st.subheader("🔍 Single Stock Deep Dive & Buy/Sell Call")
 
     c_search, c_exch = st.columns([3, 1])
