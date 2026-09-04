@@ -11,7 +11,7 @@ import pytz
 from bs4 import BeautifulSoup
 from textblob import TextBlob
 
-# --- MOBILE-FIRST PAGE CONFIGURATION ---
+# --- MOBILE-FIRST CONFIGURATION ---
 st.set_page_config(
     page_title="NSE Pulse, IPO Hub & AI Advisor",
     page_icon="📈",
@@ -19,59 +19,41 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Custom mobile CSS injection for responsive cards & layout
 st.markdown("""
 <style>
     @media (max-width: 768px) {
-        .stMetric {
-            padding: 8px !important;
-        }
-        .stMetric label {
-            font-size: 0.8rem !important;
-        }
-        .stMetric div[data-testid="stMetricValue"] {
-            font-size: 1.35rem !important;
-        }
-        div[data-testid="stHorizontalBlock"] {
-            flex-wrap: wrap !important;
-        }
-        div[data-testid="column"] {
-            width: 100% !important;
-            flex: 1 1 100% !important;
-            min-width: 100% !important;
-        }
+        .stMetric { padding: 8px !important; }
+        .stMetric label { font-size: 0.8rem !important; }
+        .stMetric div[data-testid="stMetricValue"] { font-size: 1.35rem !important; }
+        div[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
+        div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
     }
 </style>
 """, unsafe_allow_html=True)
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# --- 1. MARKET SCHEDULE ENGINE ---
+# --- 1. MARKET SCHEDULE ---
 def get_market_status():
-    """
-    Checks if the Indian Equity Market is open based on IST.
-    Regular Hours: Monday–Friday, 9:15 AM to 3:30 PM IST.
-    """
     now_ist = datetime.now(IST)
     weekday = now_ist.weekday()
     current_time = now_ist.time()
 
     is_open = False
-    if weekday < 5:  # Monday to Friday
+    if weekday < 5:
         if time(9, 15) <= current_time <= time(15, 30):
             is_open = True
     return is_open, now_ist
 
-# --- 2. DYNAMIC NSE MASTER SYMBOL SOURCE ---
+# --- 2. NSE MASTER DIRECTORY ---
 @st.cache_data(ttl=86400)
 def get_all_nse_symbols():
-    """Downloads active NSE listed shares from official exchange directory."""
     url = "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            df = pd.read_csv(io.StringIO(response.text))
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            df = pd.read_csv(io.StringIO(resp.text))
             eq_df = df[df[" SERIES"] == "EQ"].copy()
             symbols = sorted(eq_df["SYMBOL"].str.strip().tolist())
             if len(symbols) > 100:
@@ -89,49 +71,34 @@ def get_all_nse_symbols():
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
 
-# --- 3. DYNAMIC ONLINE TICKER RESOLVER (ZERO HARDCODING) ---
+# --- 3. DYNAMIC ONLINE TICKER RESOLVER ---
 def resolve_ticker_online(query_text: str):
-    """
-    Queries Yahoo Finance search API live to resolve any company name,
-    brand, or slang to its official Indian exchange ticker (.NS / .BO).
-    """
     clean_query = query_text.strip()
     url = "https://query1.finance.yahoo.com/v1/finance/search"
-    params = {
-        "q": clean_query,
-        "quotesCount": 10,
-        "newsCount": 0,
-        "listsCount": 0,
-        "enableFuzzyQuery": True
-    }
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    params = {"q": clean_query, "quotesCount": 8, "enableFuzzyQuery": True}
+    headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
-        resp = requests.get(url, params=params, headers=headers, timeout=6)
+        resp = requests.get(url, params=params, headers=headers, timeout=5)
         if resp.status_code == 200:
             quotes = resp.json().get("quotes", [])
-            # Priority 1: Direct NSE match (.NS)
             for q in quotes:
                 sym = q.get("symbol", "")
                 if sym.endswith(".NS"):
                     return sym, q.get("shortname") or q.get("longname") or sym
-            # Priority 2: Direct BSE match (.BO)
             for q in quotes:
                 sym = q.get("symbol", "")
                 if sym.endswith(".BO"):
                     return sym, q.get("shortname") or q.get("longname") or sym
-            # Priority 3: Bare equity symbol, try .NS
             for q in quotes:
                 if q.get("quoteType") == "EQUITY":
                     sym = q.get("symbol", "")
-                    if "." not in sym:
-                        return f"{sym}.NS", q.get("shortname") or q.get("longname") or sym
-                    return sym, q.get("shortname") or q.get("longname") or sym
+                    return (f"{sym}.NS", q.get("shortname") or sym) if "." not in sym else (sym, q.get("shortname") or sym)
     except Exception:
         pass
     return None, None
 
-# --- 4. LIVE GAINERS & LOSERS MARKET TICKER ---
+# --- 4. LIVE GAINERS & LOSERS ---
 @st.cache_data(ttl=15)
 def get_live_market_data(universe):
     scan_universe = universe[:45]
@@ -142,16 +109,7 @@ def get_live_market_data(universe):
         if raw.empty:
             return pd.DataFrame(), pd.DataFrame(), last_session_date
 
-        if isinstance(raw.columns, pd.MultiIndex):
-            if "Close" in raw.columns.levels[0]:
-                data = raw["Close"]
-            elif "Close" in raw.columns.levels[1]:
-                data = raw.xs("Close", axis=1, level=1)
-            else:
-                data = raw.iloc[:, :len(scan_universe)]
-        else:
-            data = raw.get("Close", raw)
-
+        data = raw["Close"] if "Close" in raw else raw
         if not data.empty and hasattr(data.index, "strftime"):
             last_session_date = data.index[-1].strftime("%d %b %Y")
 
@@ -206,27 +164,22 @@ def screen_52w_low_strong_picks(universe):
                 debt_eq = info.get("debtToEquity") or 0.0
 
                 if roe >= 0.10 and debt_eq < 120:
-                    sl_short = round(low_52w * 0.98, 2)
-                    target_short = round(curr_price * 1.07, 2)
-                    sl_long = round(low_52w * 0.95, 2)
-                    target_long = round(curr_price * 1.25, 2)
-
                     results.append({
                         "Stock": symbol,
                         "Price": round(curr_price, 2),
                         "52W Low": round(low_52w, 2),
                         "Dist %": round(dist_from_low, 2),
                         "ROE": f"{roe*100:.1f}%",
-                        "Short SL": sl_short,
-                        "Short Target": target_short,
-                        "Long SL": sl_long,
-                        "Long Target": target_long
+                        "Short SL": round(low_52w * 0.98, 2),
+                        "Short Target": round(curr_price * 1.07, 2),
+                        "Long SL": round(low_52w * 0.95, 2),
+                        "Long Target": round(curr_price * 1.25, 2)
                     })
         except Exception:
             continue
     return pd.DataFrame(results).sort_values(by="Dist %").head(3) if results else pd.DataFrame()
 
-# --- 6. LIVE IPO & GMP TRACKER ---
+# --- 6. LIVE IPO TRACKER ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -238,8 +191,7 @@ def fetch_live_ipo_gmp():
             soup = BeautifulSoup(resp.content, "html.parser")
             table = soup.find("table")
             if table:
-                rows = table.find_all("tr")[1:]
-                for row in rows:
+                for row in table.find_all("tr")[1:]:
                     cols = row.find_all("td")
                     if len(cols) >= 8:
                         name_raw = cols[0].get_text(strip=True)
@@ -249,7 +201,7 @@ def fetch_live_ipo_gmp():
                         open_dt = cols[7].get_text(strip=True)
                         close_dt = cols[8].get_text(strip=True) if len(cols) > 8 else "TBD"
 
-                        ipo_type = "SME" if ("SME" in name_raw.upper()) else "Mainboard"
+                        ipo_type = "SME" if "SME" in name_raw.upper() else "Mainboard"
                         clean_name = re.sub(r'(IPOU|IPOC|IPOL|NSE|BSE|SME|Allotted).*', '', name_raw).strip()
 
                         gmp_match = re.search(r'₹?\s*([\d\.]+)', gmp_raw)
@@ -260,52 +212,19 @@ def fetch_live_ipo_gmp():
                         gmp_pct = float(pct_match.group(1)) if pct_match else 0.0
                         issue_price = float(price_match.group(1)) if price_match else 0.0
 
-                        if gmp_pct >= 30.0:
-                            recom = "STRONG APPLY"
-                            rationale = f"High Grey Market demand ({gmp_pct:.1f}% premium). Favorable for listing gains."
-                        elif 15.0 <= gmp_pct < 30.0:
-                            recom = "APPLY (Listing Gain)"
-                            rationale = f"Healthy listing cushion ({gmp_pct:.1f}% estimated gain)."
-                        elif 5.0 <= gmp_pct < 15.0:
-                            recom = "NEUTRAL / CAUTION"
-                            rationale = "Marginal GMP safety cushion. Watch market sentiment on listing day."
-                        else:
-                            recom = "AVOID"
-                            rationale = "Little or zero Grey Market interest. Risk of flat/discount listing."
+                        recom = "STRONG APPLY" if gmp_pct >= 30 else ("APPLY (Listing Gain)" if gmp_pct >= 15 else ("NEUTRAL" if gmp_pct >= 5 else "AVOID"))
 
                         ipo_records.append({
-                            "Company": clean_name,
-                            "Type": ipo_type,
-                            "Issue Price (₹)": issue_price,
-                            "GMP (₹)": gmp_val,
-                            "Est Gain %": gmp_pct,
-                            "Lot Size": lot_raw,
-                            "Open Date": open_dt,
-                            "Close Date": close_dt,
-                            "Recommendation": recom,
-                            "Analysis & Rationale": rationale
+                            "Company": clean_name, "Type": ipo_type, "Issue Price (₹)": issue_price,
+                            "GMP (₹)": gmp_val, "Est Gain %": gmp_pct, "Lot Size": lot_raw,
+                            "Open Date": open_dt, "Close Date": close_dt, "Recommendation": recom,
+                            "Analysis & Rationale": f"Estimated listing return is {gmp_pct:.1f}% based on grey market premium."
                         })
     except Exception:
         pass
-
-    if not ipo_records:
-        ipo_records = [
-            {
-                "Company": "Pranav Constructions", "Type": "Mainboard", "Issue Price (₹)": 124.0,
-                "GMP (₹)": 33.0, "Est Gain %": 26.6, "Lot Size": "120", "Open Date": "Upcoming",
-                "Close Date": "Next Week", "Recommendation": "APPLY (Listing Gain)",
-                "Analysis & Rationale": "Healthy 26%+ listing premium expectations."
-            },
-            {
-                "Company": "Qualiance International", "Type": "SME", "Issue Price (₹)": 127.0,
-                "GMP (₹)": 55.0, "Est Gain %": 43.3, "Lot Size": "1,000", "Open Date": "Ongoing",
-                "Close Date": "Closing Soon", "Recommendation": "STRONG APPLY",
-                "Analysis & Rationale": "43%+ Grey Market Premium. Strong early subscription metrics."
-            }
-        ]
     return pd.DataFrame(ipo_records)
 
-# --- 7. CLOUD-SAFE NEWS & SENTIMENT ---
+# --- 7. CLOUD-SAFE NEWS FETCHING ---
 def fetch_cloud_safe_news(ticker_obj, symbol):
     articles = []
     total_polarity = 0
@@ -328,47 +247,132 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
     if not articles:
         try:
             url = f"https://news.google.com/rss/search?q={symbol}+stock+market+india&hl=en-IN&gl=IN&ceid=IN:en"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            resp = requests.get(url, headers=headers, timeout=5)
+            resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=5)
             feed = feedparser.parse(resp.content)
             for entry in feed.entries[:5]:
-                title = entry.title
-                score = TextBlob(title).sentiment.polarity
+                score = TextBlob(entry.title).sentiment.polarity
                 total_polarity += score
-                articles.append({"title": title, "link": entry.link, "score": score})
+                articles.append({"title": entry.title, "link": entry.link, "score": score})
         except Exception:
             pass
 
-    avg_score = (total_polarity / len(articles)) if articles else 0
-    return avg_score, articles
+    return (total_polarity / len(articles)) if articles else 0, articles
 
-# --- 8. AI STOCK CHATBOT (DYNAMIC RESOLUTION, NO HARDCODING) ---
-def process_chatbot_query(user_query: str):
-    cleaned = re.sub(
-        r"(?i)\b(will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|about)\b",
+# --- 8. UNIVERSAL CHATBOT ROUTER ---
+def process_universal_chatbot(user_query: str):
+    """
+    Handles:
+    1. Broad market questions ('Which share is best to buy now?', 'What to buy today?')
+    2. Educational & conceptual stock market queries (RSI, PE, Stop loss, etc.)
+    3. Company-specific technical and fundamental queries.
+    """
+    cleaned_query = user_query.strip()
+    upper_query = cleaned_query.upper()
+
+    # --- CATEGORY A: BROAD BUY QUESTIONS ("WHICH SHARE IS BEST TO BUY NOW?") ---
+    broad_triggers = [
+        "WHICH SHARE IS BEST TO BUY", "WHICH STOCK IS BEST TO BUY", "WHAT TO BUY NOW",
+        "WHICH SHARE TO BUY TODAY", "BEST SHARE TO BUY NOW", "BEST STOCK TO BUY",
+        "TOP SHARES TO BUY", "SUGGEST ME A SHARE", "RECOMMEND A STOCK"
+    ]
+    if any(trigger in upper_query for trigger in broad_triggers) or (
+        ("BEST" in upper_query or "WHICH" in upper_query) and "BUY" in upper_query and len(cleaned_query.split()) <= 10
+    ):
+        gainers, losers, _ = get_live_market_data(ALL_NSE_STOCKS)
+        low_52w = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+        is_open, _ = get_market_status()
+
+        resp = "### 🎯 Best Stock Opportunities Right Now (Algorithmic Selection)\n\n"
+
+        if not gainers.empty and len(gainers) >= 2:
+            momentum_pick = gainers.iloc[1]["Stock"]
+            m_price = gainers.iloc[1]["Live Price (₹)"]
+            resp += (
+                f"**1. Momentum & Breakout Pick (Short-Term 1–3 Weeks):**\n"
+                f"- **Stock:** `{momentum_pick}` (Trading at ₹{m_price:,.2f})\n"
+                f"- **Setup:** Leading today's sector participation with high relative strength.\n"
+                f"- **Action:** Buy above ₹{m_price:,.2f} | **Target:** ₹{m_price * 1.06:,.2f} | **Stop-Loss:** ₹{m_price * 0.97:,.2f}\n\n"
+            )
+
+        if not losers.empty and len(losers) >= 1:
+            rebound_pick = losers.iloc[0]["Stock"]
+            r_price = losers.iloc[0]["Live Price (₹)"]
+            resp += (
+                f"**2. Mean-Reversion Dip Pick (Short-Term 1–2 Weeks):**\n"
+                f"- **Stock:** `{rebound_pick}` (Discounted at ₹{r_price:,.2f})\n"
+                f"- **Setup:** Excessive selling near intraday exhaustion zone; ideal setup for a technical bounce.\n"
+                f"- **Action:** Accumulate near ₹{r_price:,.2f} | **Target:** ₹{r_price * 1.05:,.2f} | **Stop-Loss:** ₹{r_price * 0.96:,.2f}\n\n"
+            )
+
+        if not low_52w.empty:
+            val_row = low_52w.iloc[0]
+            resp += (
+                f"**3. Value Compounder Pick (Long-Term 6–18 Months):**\n"
+                f"- **Stock:** `{val_row['Stock']}` (Testing 52-Week Low Base at ₹{val_row['Price']:,.2f})\n"
+                f"- **Setup:** Fundamentally safe balance sheet with healthy ROE ({val_row['ROE']}) trading at deep discount.\n"
+                f"- **Action:** Accumulate between ₹{val_row['Price']:,.2f} | **Target:** ₹{val_row['Long Target']:,.2f} | **Stop-Loss:** ₹{val_row['Long SL']:,.2f}\n\n"
+            )
+
+        market_note = "Market is open. Watch 15-minute VWAP for confirmation." if is_open else "Market is closed. These levels apply for the upcoming trading session."
+        resp += f"> **Session Note:** {market_note}\n\n*Always maintain strict stop-loss orders.*"
+        return resp
+
+    # --- CATEGORY B: EDUCATIONAL & CONCEPTUAL QUESTIONS ---
+    if "RSI" in upper_query and ("WHAT" in upper_query or "HOW" in upper_query or "MEAN" in upper_query):
+        return (
+            "### 📊 What is RSI (Relative Strength Index)?\n\n"
+            "RSI is a momentum oscillator measuring speed and change of price moves on a scale of 0 to 100:\n"
+            "- **Above 70:** Stock is considered **Overbought** (pullback or pause is likely).\n"
+            "- **Below 30:** Stock is considered **Oversold** (rebound or technical bounce is likely).\n"
+            "- **40–60:** Neutral consolidation zone."
+        )
+
+    if ("PE RATIO" in upper_query or "P/E" in upper_query) and ("WHAT" in upper_query or "MEAN" in upper_query):
+        return (
+            "### 🏛️ What is the P/E Ratio (Price-to-Earnings)?\n\n"
+            "P/E shows how much investors are willing to pay for every ₹1 of company earnings:\n"
+            "- **Formula:** Current Share Price ÷ Earnings Per Share (EPS).\n"
+            "- **High P/E:** Stock has strong future growth expectations or is overvalued.\n"
+            "- **Low P/E:** Stock is undervalued or facing operational headwinds.\n\n"
+            "*Always compare a stock's P/E with its sector peers, not across different industries.*"
+        )
+
+    if "STOP LOSS" in upper_query and ("WHAT" in upper_query or "HOW" in upper_query or "MEAN" in upper_query):
+        return (
+            "### 🛡️ What is a Stop-Loss (SL)?\n\n"
+            "A Stop-Loss is a conditional order placed with your broker to automatically sell a stock once it hits a set price. "
+            "It protects your trading capital from unexpected market drops. For swing trades, keeping risk bounded to 2%–3% below key support is standard practice."
+        )
+
+    # --- CATEGORY C: SPECIFIC COMPANY QUERIES (ONLINE DYNAMIC LOOKUP) ---
+    clean_target = re.sub(
+        r"(?i)\b(will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how|analysis)\b",
         " ",
-        user_query
+        cleaned_query
     )
-    search_term = re.sub(r"\s+", " ", cleaned).strip(" ?.,!")
+    search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
 
     if not search_term or len(search_term) < 2:
         return (
-            "Please include a company name or ticker in your question "
-            "(e.g., *'Will Infosys price hike in next few days?'*, *'Is Tata Motors safe to hold?'*, or *'Analyze ITC'*)."
+            "I'm here to help! You can ask me:\n"
+            "- *'Which share is best to buy now?'*\n"
+            "- *'Will Infosys price hike in next few days?'*\n"
+            "- *'Is Tata Motors safe for long-term holding?'*\n"
+            "- *'What is RSI and how to use it?'*"
         )
 
     ticker_symbol, company_name = resolve_ticker_online(search_term)
     if not ticker_symbol:
         return (
-            f"I searched online for **'{search_term}'** but could not identify an active listed ticker on NSE/BSE. "
-            "Please check the spelling or provide the exact ticker symbol (e.g. INFY, TATAMOTORS, RELIANCE)."
+            f"I searched online for **'{search_term}'** but could not find a matching listed stock on NSE/BSE. "
+            "Please check the spelling or provide the direct ticker symbol (e.g., INFY, TATAMOTORS, RELIANCE)."
         )
 
     try:
         stock = yf.Ticker(ticker_symbol)
         hist = stock.history(period="6mo")
         if hist.empty or len(hist) < 25:
-            return f"Retrieved **{company_name}** (`{ticker_symbol}`), but insufficient recent trading data was returned from the exchange."
+            return f"Retrieved **{company_name}** (`{ticker_symbol}`), but insufficient trading data was returned from the exchange."
 
         info = stock.info or {}
         curr_price = float(hist["Close"].iloc[-1])
@@ -377,11 +381,9 @@ def process_chatbot_query(user_query: str):
         roe = info.get("returnOnEquity") or 0.0
         pe = info.get("trailingPE", "N/A")
 
-        query_upper = user_query.upper()
-
-        if any(w in query_upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
+        if any(w in upper_query for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
             is_bullish = (rsi < 65) and (curr_price >= sma_50)
-            bias = "Bullish / Upward Momentum" if is_bullish else "Consolidation / Pullback Risk"
+            bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
 
             rsi_desc = (
                 f"{rsi:.1f} (Overbought — risk of cooling off)" if rsi > 70
@@ -389,7 +391,7 @@ def process_chatbot_query(user_query: str):
                 else f"{rsi:.1f} (Neutral momentum)"
             )
             sma_desc = (
-                f"Trading above 50-day SMA (₹{sma_50:.2f}) — short-term trend is positive."
+                f"Trading above 50-day SMA (₹{sma_50:.2f}) — confirms short-term trend strength."
                 if curr_price >= sma_50
                 else f"Trading below 50-day SMA (₹{sma_50:.2f}) — resistance overhead."
             )
@@ -411,7 +413,7 @@ def process_chatbot_query(user_query: str):
                 )
             )
 
-        elif any(w in query_upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
+        elif any(w in upper_query for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
             health = "Strong & Resilient" if (roe >= 0.15) else "Moderate / Requires Selective Entry"
             roe_display = f"{roe * 100:.1f}%" if roe else "N/A"
 
@@ -444,7 +446,7 @@ def process_chatbot_query(user_query: str):
 
 # --- UI MAIN NAVIGATION ---
 st.title("⚡ NSE Mobile Pulse & AI Advisor")
-st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Equities • Auto-Detected Online Search • Live IPO Hub")
+st.caption(f"Tracking {len(ALL_NSE_STOCKS):,} Equities • Universal AI Assistant • Live IPO Hub")
 
 tab_movers, tab_chat, tab_ipos, tab_deepdive = st.tabs([
     "📊 Market Watch",
@@ -464,7 +466,6 @@ with tab_movers:
         is_open, current_time_ist = get_market_status()
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
-        # 1. DATE-AWARE HEADER
         if is_open:
             st.subheader("🟢 Today's Live Market Movers (Market Open)")
             st.caption(f"🔄 Auto-updating every 20s | Time: **{time_str}**")
@@ -473,7 +474,6 @@ with tab_movers:
             st.subheader(f"🔴 Top Movers — Last Trading Session{header_date}")
             st.caption(f"Market Closed (Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri) | Current Time: **{time_str}**")
 
-        # 2. STRATEGIC RECOMMENDATIONS (INTRADAY CALL REMOVED WHEN MARKET CLOSED)
         st.markdown("---")
         if is_open:
             st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
@@ -491,42 +491,16 @@ with tab_movers:
             all_picks = []
             if is_open:
                 all_picks.append({
-                    "Stock": top_g1,
-                    "Horizon": "Intraday Momentum",
-                    "Action": "BUY ON DIP",
+                    "Stock": top_g1, "Horizon": "Intraday Momentum", "Action": "BUY ON DIP",
                     "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-                    "Why": "Strong morning participation and volume expansion. Setup favors riding trend continuation toward VWAP pullbacks."
+                    "Why": "Strong morning participation and volume expansion. Ride momentum toward VWAP pullbacks."
                 })
 
             all_picks.extend([
-                {
-                    "Stock": top_g2,
-                    "Horizon": "Short-Term Swing (1–4 Wks)",
-                    "Action": "BUY (Breakout)",
-                    "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)",
-                    "Why": "Clean breakout clearing immediate resistance levels with supportive volume."
-                },
-                {
-                    "Stock": top_l1,
-                    "Horizon": "Short-Term Rebound (1–3 Wks)",
-                    "Action": "BUY (Mean Reversion)",
-                    "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)",
-                    "Why": "Selling exhaustion near dynamic lower support bands. Favorable risk-reward for technical bounce."
-                },
-                {
-                    "Stock": top_l2,
-                    "Horizon": "Long-Term Value (6–12 Mos)",
-                    "Action": "BUY (Accumulate)",
-                    "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)",
-                    "Why": "Market drawdown on solid balance sheet, offering attractive valuation safety."
-                },
-                {
-                    "Stock": top_l3,
-                    "Horizon": "Long-Term Core (12–24 Mos)",
-                    "Action": "BUY (Compounder)",
-                    "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)",
-                    "Why": "Macro pullback on fundamentally sound asset with strong capital return ratios."
-                }
+                {"Stock": top_g2, "Horizon": "Short-Term Swing (1–4 Wks)", "Action": "BUY (Breakout)", "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)", "Why": "Clean breakout clearing immediate resistance levels with volume."},
+                {"Stock": top_l1, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Mean Reversion)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)", "Why": "Selling exhaustion near dynamic lower support bands; favorable rebound risk-reward."},
+                {"Stock": top_l2, "Horizon": "Long-Term Value (6–12 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)", "Why": "Market drawdown on solid balance sheet, offering attractive valuation safety."},
+                {"Stock": top_l3, "Horizon": "Long-Term Core (12–24 Mos)", "Action": "BUY (Compounder)", "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)", "Why": "Macro pullback on fundamentally sound asset with strong capital return ratios."}
             ])
 
             p_cols = st.columns(len(all_picks))
@@ -539,33 +513,16 @@ with tab_movers:
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
 
-        # 3. TABLES OF TOP GAINERS & LOSERS
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
             st.markdown("##### 🟢 Top Gainers")
             if not gainers_df.empty:
-                st.dataframe(
-                    gainers_df.style.format({
-                        "Live Price (₹)": "₹{:.2f}",
-                        "Change (₹)": "+{:.2f}",
-                        "% Change": "+{:.2f}%"
-                    }),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                st.dataframe(gainers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "+{:.2f}", "% Change": "+{:.2f}%"}), use_container_width=True, hide_index=True)
         with l_col:
             st.markdown("##### 🔴 Top Losers")
             if not losers_df.empty:
-                st.dataframe(
-                    losers_df.style.format({
-                        "Live Price (₹)": "₹{:.2f}",
-                        "Change (₹)": "{:.2f}",
-                        "% Change": "{:.2f}%"
-                    }),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
     if is_market_open:
         @st.fragment(run_every=20)
@@ -575,10 +532,9 @@ with tab_movers:
     else:
         render_movers_content()
 
-    # 4. TOP 3 52-WEEK LOW PICKS
     st.markdown("---")
     st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
-    st.caption("Zero/low debt, solid ROE (>10%), and testing 52-week support with calculated Stop-Loss & Target levels.")
+    st.caption("Low debt, solid ROE (>10%), and testing 52-week support with calculated Stop-Loss & Target levels.")
 
     low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
     if not low_screener_df.empty:
@@ -601,29 +557,29 @@ with tab_movers:
         st.info("Scanning for quality shares currently testing 52-week support zones...")
 
 # ==============================================================================
-# TAB 2: INTERACTIVE AI STOCK CHATBOT
+# TAB 2: UNIVERSAL STOCK CHATBOT (HANDLES ALL QUESTIONS)
 # ==============================================================================
 with tab_chat:
-    st.subheader("💬 AI Stock & Share Intelligence Assistant")
-    st.caption("Ask questions in plain English (e.g., *'Will Infosys price hike in next few days?'*, *'Is Tata Motors safe to hold?'*, *'Should I buy Reliance?'*)")
+    st.subheader("💬 Universal AI Stock Advisor")
+    st.caption("Ask broad market questions, conceptual terms, or any specific Indian stock.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your Indian Equities Assistant. Mention any company name or NSE ticker to get an instant indicator-backed assessment."}
+            {"role": "assistant", "content": "Hello! I am your Indian Equities Assistant. Ask me anything, like:\n- *'Which share is best to buy now?'*\n- *'Will Infosys price hike in next few days?'*\n- *'What is RSI and how do I use it?'*"}
         ]
 
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if user_prompt := st.chat_input("Ask about any Indian stock..."):
+    if user_prompt := st.chat_input("Ask any stock market question..."):
         st.session_state.chat_history.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Searching ticker online & analyzing price action..."):
-                reply = process_chatbot_query(user_prompt)
+            with st.spinner("Analyzing market data and indicators..."):
+                reply = process_universal_chatbot(user_prompt)
                 st.markdown(reply)
                 st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
@@ -635,44 +591,46 @@ with tab_ipos:
     st.caption("Live Grey Market Premium (GMP) • Valuation & Sentiment Check")
 
     ipo_df = fetch_live_ipo_gmp()
+    if not ipo_df.empty:
+        f1, f2 = st.columns([2, 2])
+        with f1:
+            category = st.radio("Category Filter:", ["All", "Mainboard", "SME"], horizontal=True)
+        with f2:
+            recom_filter = st.selectbox("Recommendation Filter:", ["All Calls", "STRONG APPLY", "APPLY (Listing Gain)", "AVOID"])
 
-    f1, f2 = st.columns([2, 2])
-    with f1:
-        category = st.radio("Category Filter:", ["All", "Mainboard", "SME"], horizontal=True)
-    with f2:
-        recom_filter = st.selectbox("Recommendation Filter:", ["All Calls", "STRONG APPLY", "APPLY (Listing Gain)", "AVOID"])
+        filtered_ipo = ipo_df.copy()
+        if category != "All":
+            filtered_ipo = filtered_ipo[filtered_ipo["Type"] == category]
+        if recom_filter != "All Calls":
+            filtered_ipo = filtered_ipo[filtered_ipo["Recommendation"] == recom_filter]
 
-    filtered_ipo = ipo_df.copy()
-    if category != "All":
-        filtered_ipo = filtered_ipo[filtered_ipo["Type"] == category]
-    if recom_filter != "All Calls":
-        filtered_ipo = filtered_ipo[filtered_ipo["Recommendation"] == recom_filter]
+        for _, row in filtered_ipo.iterrows():
+            with st.container(border=True):
+                h1, h2, h3 = st.columns([3, 2, 2])
+                with h1:
+                    st.markdown(f"### {row['Company']}")
+                    st.caption(f"Category: **{row['Type']}** | Lot Size: **{row['Lot Size']}**")
+                with h2:
+                    st.metric(
+                        label="Expected Listing Premium",
+                        value=f"₹{row['GMP (₹)']} GMP",
+                        delta=f"+{row['Est Gain %']}% Gain" if row['Est Gain %'] > 0 else "Flat / Discount"
+                    )
+                with h3:
+                    rec = row["Recommendation"]
+                    if "STRONG" in rec: st.success(f"### {rec}")
+                    elif "APPLY" in rec: st.info(f"### {rec}")
+                    elif "NEUTRAL" in rec: st.warning(f"### {rec}")
+                    else: st.error(f"### {rec}")
 
-    for _, row in filtered_ipo.iterrows():
-        with st.container(border=True):
-            h1, h2, h3 = st.columns([3, 2, 2])
-            with h1:
-                st.markdown(f"### {row['Company']}")
-                st.caption(f"Category: **{row['Type']}** | Lot Size: **{row['Lot Size']}**")
-            with h2:
-                st.metric(
-                    label="Expected Listing Premium",
-                    value=f"₹{row['GMP (₹)']} GMP",
-                    delta=f"+{row['Est Gain %']}% Gain" if row['Est Gain %'] > 0 else "Flat / Discount"
-                )
-            with h3:
-                rec = row["Recommendation"]
-                if "STRONG" in rec: st.success(f"### {rec}")
-                elif "APPLY" in rec: st.info(f"### {rec}")
-                elif "NEUTRAL" in rec: st.warning(f"### {rec}")
-                else: st.error(f"### {rec}")
-
-            d1, d2 = st.columns([2, 5])
-            with d1:
-                st.write(f"**Issue Price:** ₹{row['Issue Price (₹)']}")
-                st.write(f"**Bidding Dates:** {row['Open Date']} to {row['Close Date']}")
-            with d2:
-                st.markdown(f"**Why this call?** {row['Analysis & Rationale']}")
+                d1, d2 = st.columns([2, 5])
+                with d1:
+                    st.write(f"**Issue Price:** ₹{row['Issue Price (₹)']}")
+                    st.write(f"**Bidding Dates:** {row['Open Date']} to {row['Close Date']}")
+                with d2:
+                    st.markdown(f"**Why this call?** {row['Analysis & Rationale']}")
+    else:
+        st.info("No active IPO grey market data available right now.")
 
 # ==============================================================================
 # TAB 4: DEEP-DIVE SINGLE STOCK ANALYZER
