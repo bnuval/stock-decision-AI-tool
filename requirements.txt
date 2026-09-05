@@ -7,3 +7,4 @@ textblob
 requests
 beautifulsoup4
 pytz
+google-genai

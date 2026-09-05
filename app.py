@@ -5,11 +5,25 @@ import ta
 import feedparser
 import requests
 import io
+import os
 import re
+import time as time_module
 from datetime import datetime, time
 import pytz
 from bs4 import BeautifulSoup
 from textblob import TextBlob
+
+# Optional GenAI LLM Client import
+try:
+    from google import genai
+    from google.genai import types
+    GENAI_AVAILABLE = True
+except ImportError:
+    GENAI_AVAILABLE = False
+
+# --- CONFIGURATION & CREDENTIALS ---
+# Replace with your newly generated private key if testing locally without secrets.toml
+DEFAULT_KEY_FALLBACK = ""
 
 # --- MOBILE-FIRST PAGE CONFIGURATION ---
 st.set_page_config(
@@ -23,7 +37,6 @@ st.set_page_config(
 if "current_tab" not in st.session_state:
     st.session_state.current_tab = "📊 Market Watch"
 
-# Query param or session-based navigation handler
 query_params = st.query_params
 if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "dive"]:
     nav_map = {
@@ -37,13 +50,11 @@ if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "di
 # --- CSS: FIXED HEADER + STICKY TABS ROW ---
 st.markdown("""
 <style>
-    /* 1. Hide default Streamlit empty header */
     header[data-testid="stHeader"] {
         display: none !important;
         height: 0px !important;
     }
 
-    /* 2. Push content below the fixed header (prevents text clipping) */
     .block-container {
         padding-top: 6.8rem !important;
         padding-left: 0.8rem !important;
@@ -51,7 +62,6 @@ st.markdown("""
         padding-bottom: 4rem !important;
     }
 
-    /* 3. Pinned Master Top Bar (Title + Tabs) */
     .pinned-master-bar {
         position: fixed !important;
         top: 0px !important;
@@ -90,7 +100,6 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
-    /* Navigation Tab Links inside Master Bar */
     .nav-tabs-wrapper {
         display: flex !important;
         flex-direction: row !important;
@@ -131,7 +140,6 @@ st.markdown("""
         font-weight: 600 !important;
     }
 
-    /* Mobile adjustments */
     @media (max-width: 768px) {
         .block-container {
             padding-top: 5.8rem !important;
@@ -171,7 +179,7 @@ def get_market_status():
     current_time = now_ist.time()
 
     is_open = False
-    if weekday < 5:  # Monday to Friday
+    if weekday < 5:
         if time(9, 15) <= current_time <= time(15, 30):
             is_open = True
     return is_open, now_ist
@@ -325,7 +333,7 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME IPO HUB (COMPLETE WITH ONGOING, UPCOMING & AVOID OPTIONS) ---
+# --- 6. REAL-TIME IPO HUB (ONGOING, UPCOMING & AVOID LISTINGS) ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -352,7 +360,6 @@ def fetch_live_ipo_gmp():
                         open_dt = cols[7].get_text(strip=True)
                         close_dt = cols[8].get_text(strip=True) if len(cols) > 8 else "TBD"
 
-                        # 1. Parse Status
                         status = "Upcoming"
                         if any(k in raw_name for k in ["SMEO", "IPOO", "Open"]):
                             status = "Ongoing (Open)"
@@ -364,7 +371,6 @@ def fetch_live_ipo_gmp():
                         ipo_type = "SME" if "SME" in raw_name.upper() else "Mainboard"
                         clean_name = re.sub(r'(IPOU|IPOC|IPOL|IPOO|NSE|BSE|SME|Allotted|SMEO|SMEU|SMEC).*', '', raw_name).strip()
 
-                        # 2. Parse Numeric Values (Handles -- and missing values)
                         gmp_match = re.search(r'₹?\s*([\d\.]+)', gmp_raw)
                         pct_match = re.search(r'\(([\d\.]+)%\)', gmp_raw)
                         price_match = re.search(r'([\d\.]+)', price_raw)
@@ -373,7 +379,6 @@ def fetch_live_ipo_gmp():
                         gmp_pct = float(pct_match.group(1)) if pct_match else 0.0
                         issue_price = float(price_match.group(1)) if price_match else 0.0
 
-                        # 3. Formulate Action Signals (guarantees AVOID options are retained)
                         if gmp_pct >= 30.0:
                             recom = "STRONG APPLY"
                             rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% estimated gain). Solid investor appetite."
@@ -404,7 +409,6 @@ def fetch_live_ipo_gmp():
     except Exception:
         pass
 
-    # Built-in live market pipeline fallback covering every recommendation tier
     if not ipo_records:
         ipo_records = [
             {
@@ -469,8 +473,107 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
     return (total_polarity / len(articles)) if articles else 0, articles
 
-# --- 8. UNIVERSAL ADAPTIVE CHATBOT ---
-def process_universal_chatbot(user_query: str):
+# --- 8. REAL-TIME DATA CONTEXT BUILDER FOR AI ---
+def get_live_market_context_for_query(query: str):
+    words = [w.strip(" ?.,!").upper() for w in query.split()]
+    direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
+    clean_target = re.sub(
+        r"(?i)\b(analiyse|analyse|analyze|analysis|check|review|details|will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how)\b",
+        " ",
+        query
+    )
+    search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
+
+    context_str = ""
+    ticker_found = None
+    company_name = None
+
+    if direct_symbol:
+        ticker_found = f"{direct_symbol}.NS"
+        company_name = direct_symbol
+    elif search_term and len(search_term) >= 2:
+        ticker_found, company_name = resolve_ticker_online(search_term)
+
+    if ticker_found:
+        try:
+            stock = yf.Ticker(ticker_found)
+            hist = stock.history(period="6mo")
+            if not hist.empty:
+                curr_price = float(hist["Close"].iloc[-1])
+                rsi = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
+                sma_50 = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
+                sma_200 = float(ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator().iloc[-1]) if len(hist) >= 150 else None
+                info = stock.info or {}
+                roe = (info.get("returnOnEquity") or 0) * 100
+                pe = info.get("trailingPE", "N/A")
+                debt_eq = info.get("debtToEquity", "N/A")
+
+                context_str += f"\n[REAL-TIME STOCK DATA FOR {company_name} ({ticker_found})]\n"
+                context_str += f"- Live Traded Price (LTP): ₹{curr_price:,.2f}\n"
+                context_str += f"- RSI (14): {rsi:.2f}\n"
+                context_str += f"- 50-day SMA: ₹{sma_50:.2f} (Price is {'ABOVE' if curr_price >= sma_50 else 'BELOW'})\n"
+                if sma_200:
+                    context_str += f"- 200-day SMA: ₹{sma_200:.2f}\n"
+                context_str += f"- P/E Ratio: {pe}, ROE: {roe:.2f}%, Debt-to-Equity: {debt_eq}\n"
+        except Exception:
+            pass
+
+    if any(k in query.upper() for k in ["BEST", "BUY", "TODAY", "MARKET", "GAINERS", "LOSERS", "NOW"]):
+        g, l, d = get_live_market_data(ALL_NSE_STOCKS)
+        lows = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+        context_str += "\n[CURRENT TOP MARKET MOVERS]\n"
+        if not g.empty:
+            context_str += f"- Top Gainers: {', '.join(g['Stock'].head(3).tolist())}\n"
+        if not l.empty:
+            context_str += f"- Top Losers: {', '.join(l['Stock'].head(3).tolist())}\n"
+        if not lows.empty:
+            context_str += f"- Quality Stocks at 52-Week Lows: {', '.join(lows['Stock'].head(3).tolist())}\n"
+
+    return context_str
+
+# --- 9. INTERACTIVE STREAMING CHATBOT GENERATOR ---
+def stream_chatbot_response(user_query: str):
+    api_key = (
+        st.secrets.get("GEMINI_API_KEY") 
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets 
+        else os.getenv("GEMINI_API_KEY", DEFAULT_KEY_FALLBACK)
+    )
+
+    live_context = get_live_market_context_for_query(user_query)
+
+    if GENAI_AVAILABLE and api_key:
+        try:
+            client = genai.Client(api_key=api_key)
+            prompt = f"""
+            You are a seasoned Indian Equity Market Analyst for the NSE & BSE.
+            Provide a crisp, professional, mobile-friendly answer using bullet points and clear bold targets.
+            Include key levels (Entry, Stop-Loss, Target), indicator interpretations (RSI, 50/200 SMA), and risk caveats.
+            Always adhere to SEBI educational guidelines.
+
+            LIVE MARKET DATA CONTEXT:
+            {live_context}
+
+            USER QUESTION:
+            {user_query}
+            """
+            response = client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2)
+            )
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
+            return
+        except Exception:
+            pass
+
+    static_reply = process_universal_chatbot_static(user_query, live_context)
+    for word in static_reply.split(" "):
+        yield word + " "
+        time_module.sleep(0.015)
+
+def process_universal_chatbot_static(user_query: str, live_context: str = ""):
     raw_query = user_query.strip()
     upper = raw_query.upper()
 
@@ -519,7 +622,6 @@ def process_universal_chatbot(user_query: str):
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
-    # Specific stock queries
     words = [w.strip(" ?.,!").upper() for w in raw_query.split()]
     direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
 
@@ -760,15 +862,15 @@ if active_tab == "📊 Market Watch":
     render_movers_dashboard()
 
 # ==============================================================================
-# TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT
+# TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT (STREAMING + REAL-TIME DATA)
 # ==============================================================================
 elif active_tab == "💬 Stock Chatbot":
     st.subheader("💬 Universal AI Stock & Market Advisor")
-    st.caption("Ask anything: market outlook, company analysis, trading definitions, or comparisons.")
+    st.caption("Real-time technical indicators, live price discovery, and conversational financial analysis.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your Indian Equities Assistant. Ask me anything, such as:\n- *'Analyse INFY'*\n- *'Which share is best to buy now?'*\n- *'Will Infosys price hike in next few days?'*\n- *'Is Tata Motors safe to hold?'*\n- *'Compare TCS vs Infosys'*\n- *'What is RSI and how do I use it?'*"}
+            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. Ask me anything, such as:\n- *'Analyse INFY with latest price action'* \n- *'Which share is best to buy now?'* \n- *'Will Tata Motors cross its 50-day average?'* \n- *'What is RSI and how do I trade it?'*"}
         ]
 
     for msg in st.session_state.chat_history:
@@ -781,17 +883,16 @@ elif active_tab == "💬 Stock Chatbot":
             st.markdown(user_prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analyzing live market data & indicators..."):
-                reply = process_universal_chatbot(user_prompt)
-                st.markdown(reply)
-                st.session_state.chat_history.append({"role": "assistant", "content": reply})
+            response_generator = stream_chatbot_response(user_prompt)
+            full_response = st.write_stream(response_generator)
+            st.session_state.chat_history.append({"role": "assistant", "content": full_response})
 
 # ==============================================================================
-# TAB 3: LIVE IPOs & GMP TRACKER
+# TAB 3: LIVE IPOs & GMP TRACKER (FULL LIST INCLUDING AVOID OPTIONS)
 # ==============================================================================
 elif active_tab == "🚀 IPO Hub":
     st.subheader("🔥 Ongoing & Upcoming IPO Tracker (Mainboard & SME)")
-    st.caption("Live Grey Market Premium (GMP) • Issue Dates • Action Signals")
+    st.caption("Live Grey Market Premium (GMP) • Subscription • Action Signals (Apply, Neutral, Avoid)")
 
     ipo_df = fetch_live_ipo_gmp()
     if not ipo_df.empty:
