@@ -592,47 +592,14 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. QUOTA-SAFE BULLETPROOF GEMINI CALLER (FLASH-ONLY PRIORITY) ---
-@st.cache_data(ttl=3600)
-def get_available_gemini_models(api_key: str):
-    """Dynamically queries Google AI Studio, prioritizing high-quota Flash models and excluding Pro models."""
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    headers = {
-        "Content-Type": "application/json",
-        "x-goog-api-key": api_key
-    }
-    try:
-        resp = requests.get(url, headers=headers, timeout=8)
-        if resp.status_code == 200:
-            models_data = resp.json().get("models", [])
-            valid_models = []
-            for m in models_data:
-                methods = m.get("supportedGenerationMethods", [])
-                name = m.get("name", "").replace("models/", "")
-                # Exclude Pro models that cause limit: 0 on free plans
-                if "generateContent" in methods and "pro" not in name.lower():
-                    valid_models.append(name)
-
-            # Sort Flash models by stability & free quota availability
-            valid_models.sort(key=lambda x: (
-                0 if "3.6-flash" in x else
-                1 if "3.5-flash-lite" in x else
-                2 if "3.7-flash" in x else
-                3 if "2.5-flash" in x else
-                4 if "flash" in x else 5
-            ))
-            if valid_models:
-                return valid_models
-    except Exception:
-        pass
-
-    # Reliable fallback order for free-tier users
-    return ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash"]
-
-
+# --- 10. ACTIVE MODEL CALLER (GEMINI 3.6 FLASH & 3.5 FLASH-LITE) ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST handling 429 quota exhaustion with fast model fallback."""
-    models_to_try = get_available_gemini_models(api_key)
+    """Direct HTTP POST to Google AI Studio with active Gemini 3.6 Flash endpoints."""
+    target_models = [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.7-flash"
+    ]
 
     headers = {
         "Content-Type": "application/json",
@@ -644,11 +611,8 @@ def call_gemini_rest_api(prompt: str, api_key: str):
 
     last_error = ""
 
-    for model_name in models_to_try:
-        # Strictly ignore Pro endpoints to protect free-tier rate limits
-        if "pro" in model_name.lower():
-            continue
-
+    # Try current production models directly
+    for model_name in target_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=12)
@@ -660,13 +624,30 @@ def call_gemini_rest_api(prompt: str, api_key: str):
                     if parts:
                         return parts[0].get("text", "")
             elif resp.status_code == 429:
-                # Catch 429 immediately and fallback to the next model without failing the app
-                last_error = f"{model_name} (Quota 429 reached, trying next model)"
+                last_error = f"{model_name} (Rate limited 429)"
                 continue
             else:
                 last_error = f"{model_name} -> HTTP {resp.status_code}: {resp.text}"
         except Exception as e:
-            last_error = str(e)
+            last_error = f"{model_name} -> {str(e)}"
+
+    # Dynamic fallback: query Google for any live Flash model
+    try:
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_resp = requests.get(list_url, headers=headers, timeout=8)
+        if list_resp.status_code == 200:
+            for m in list_resp.json().get("models", []):
+                name = m.get("name", "").replace("models/", "")
+                methods = m.get("supportedGenerationMethods", [])
+                if "generateContent" in methods and "flash" in name.lower() and "pro" not in name.lower():
+                    run_url = f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent?key={api_key}"
+                    resp = requests.post(run_url, headers=headers, json=payload, timeout=12)
+                    if resp.status_code == 200:
+                        parts = resp.json().get("candidates", [])[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "")
+    except Exception:
+        pass
 
     return f"ERROR: {last_error}"
 
