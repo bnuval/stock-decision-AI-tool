@@ -592,15 +592,46 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. MULTI-MODEL REST API CALLER WITH ACTIVE GEMINI ENDPOINTS ---
+# --- 10. DYNAMIC MODEL DISCOVERY & BULLETPROOF GEMINI CALLER ---
+@st.cache_data(ttl=3600)
+def get_available_gemini_models(api_key: str):
+    """Dynamically queries Google AI Studio to find which models are active for this key."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=8)
+        if resp.status_code == 200:
+            models_data = resp.json().get("models", [])
+            valid_models = []
+            for m in models_data:
+                methods = m.get("supportedGenerationMethods", [])
+                name = m.get("name", "").replace("models/", "")
+                if "generateContent" in methods:
+                    valid_models.append(name)
+            
+            # Prioritize fast, production-ready Flash models
+            valid_models.sort(key=lambda x: (
+                0 if "2.0-flash" in x else
+                1 if "3.8-flash" in x else
+                2 if "3.7-flash" in x else
+                3 if "3.6-flash" in x else
+                4 if "flash" in x else 5
+            ))
+            if valid_models:
+                return valid_models
+    except Exception:
+        pass
+    
+    # Universal fallback list if list endpoint times out
+    return ["gemini-2.0-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash-lite"]
+
+
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio prioritizing active endpoints."""
-    active_models = [
-        "gemini-3.6-flash",
-        "gemini-3.1-pro-preview",
-        "gemini-3.5-flash",
-        "gemini-3-flash"
-    ]
+    """Direct HTTP POST to Google AI Studio using active discovered models."""
+    models_to_try = get_available_gemini_models(api_key)
 
     headers = {
         "Content-Type": "application/json",
@@ -612,11 +643,10 @@ def call_gemini_rest_api(prompt: str, api_key: str):
 
     last_error = ""
 
-    # Sequence 1: Test prioritized production model endpoints directly
-    for model_name in active_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=12)
+            resp = requests.post(url, headers=headers, json=payload, timeout=14)
             if resp.status_code == 200:
                 result = resp.json()
                 candidates = result.get("candidates", [])
@@ -628,24 +658,6 @@ def call_gemini_rest_api(prompt: str, api_key: str):
                 last_error = f"{model_name} -> HTTP {resp.status_code}: {resp.text}"
         except Exception as e:
             last_error = str(e)
-
-    # Sequence 2: Dynamic discovery fallback (queries any enabled generateContent model on your key)
-    try:
-        list_url = "https://generativelanguage.googleapis.com/v1beta/models"
-        list_resp = requests.get(list_url, headers=headers, timeout=8)
-        if list_resp.status_code == 200:
-            for m in list_resp.json().get("models", []):
-                m_name = m.get("name", "")
-                supported = m.get("supportedGenerationMethods", [])
-                if "generateContent" in supported:
-                    run_url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent"
-                    resp = requests.post(run_url, headers=headers, json=payload, timeout=12)
-                    if resp.status_code == 200:
-                        parts = resp.json().get("candidates", [])[0].get("content", {}).get("parts", [])
-                        if parts:
-                            return parts[0].get("text", "")
-    except Exception:
-        pass
 
     return f"ERROR: {last_error}"
 
