@@ -592,10 +592,10 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. DYNAMIC MODEL DISCOVERY & BULLETPROOF GEMINI CALLER ---
+# --- 10. QUOTA-SAFE BULLETPROOF GEMINI CALLER (FLASH-ONLY PRIORITY) ---
 @st.cache_data(ttl=3600)
 def get_available_gemini_models(api_key: str):
-    """Dynamically queries Google AI Studio to find which models are active for this key."""
+    """Dynamically queries Google AI Studio, prioritizing high-quota Flash models and excluding Pro models."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     headers = {
         "Content-Type": "application/json",
@@ -609,35 +609,29 @@ def get_available_gemini_models(api_key: str):
             for m in models_data:
                 methods = m.get("supportedGenerationMethods", [])
                 name = m.get("name", "").replace("models/", "")
-                if "generateContent" in methods:
+                # Exclude Pro models that cause limit: 0 on free plans
+                if "generateContent" in methods and "pro" not in name.lower():
                     valid_models.append(name)
-            
-            # Prioritize current active models
+
+            # Sort Flash models by stability & free quota availability
             valid_models.sort(key=lambda x: (
                 0 if "3.6-flash" in x else
                 1 if "3.5-flash-lite" in x else
                 2 if "3.7-flash" in x else
-                3 if "3.8-flash" in x else
-                4 if "3.1-pro" in x else
-                5 if "flash" in x else 6
+                3 if "2.5-flash" in x else
+                4 if "flash" in x else 5
             ))
             if valid_models:
                 return valid_models
     except Exception:
         pass
-    
-    # Universal active production endpoints
-    return [
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-        "gemini-3.7-flash",
-        "gemini-3.8-flash",
-        "gemini-3.1-pro-preview"
-    ]
+
+    # Reliable fallback order for free-tier users
+    return ["gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-2.5-flash"]
 
 
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio using active discovered models."""
+    """Direct HTTP POST handling 429 quota exhaustion with fast model fallback."""
     models_to_try = get_available_gemini_models(api_key)
 
     headers = {
@@ -651,9 +645,13 @@ def call_gemini_rest_api(prompt: str, api_key: str):
     last_error = ""
 
     for model_name in models_to_try:
+        # Strictly ignore Pro endpoints to protect free-tier rate limits
+        if "pro" in model_name.lower():
+            continue
+
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            resp = requests.post(url, headers=headers, json=payload, timeout=14)
+            resp = requests.post(url, headers=headers, json=payload, timeout=12)
             if resp.status_code == 200:
                 result = resp.json()
                 candidates = result.get("candidates", [])
@@ -661,6 +659,10 @@ def call_gemini_rest_api(prompt: str, api_key: str):
                     parts = candidates[0].get("content", {}).get("parts", [])
                     if parts:
                         return parts[0].get("text", "")
+            elif resp.status_code == 429:
+                # Catch 429 immediately and fallback to the next model without failing the app
+                last_error = f"{model_name} (Quota 429 reached, trying next model)"
+                continue
             else:
                 last_error = f"{model_name} -> HTTP {resp.status_code}: {resp.text}"
         except Exception as e:
@@ -982,7 +984,7 @@ if active_tab == "📊 Market Watch":
 # ==============================================================================
 elif active_tab == "💬 Stock Chatbot":
     st.subheader("💬 Universal AI Stock & Market Advisor")
-    
+
     if st.session_state.active_stock.get("company"):
         st.caption(f"📍 Active Context: **{st.session_state.active_stock['company']}** (`{st.session_state.active_stock['symbol']}`) | Ask follow-ups or introduce any new stock.")
     else:
