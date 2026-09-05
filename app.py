@@ -26,6 +26,10 @@ st.set_page_config(
 if "current_tab" not in st.session_state:
     st.session_state.current_tab = "📊 Market Watch"
 
+# Initialize conversational active stock tracker
+if "active_stock" not in st.session_state:
+    st.session_state.active_stock = {"symbol": None, "company": None}
+
 query_params = st.query_params
 if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "dive"]:
     nav_map = {
@@ -194,7 +198,7 @@ def get_all_nse_symbols():
         "TITAN", "BAJFINANCE", "TATAMOTORS", "TATASTEEL", "NTPC", "POWERGRID", "M&M",
         "ADANIENT", "ADANIPORTS", "COALINDIA", "BAJAJFINSV", "WIPRO", "ULTRACEMCO", "ONGC",
         "HCLTECH", "TECHM", "DIVISLAB", "VEDL", "ZOMATO", "PAYTM", "JIOFIN", "HAL",
-        "BEL", "BHEL", "IRCTC", "RVNL", "IREDA", "SUZLON", "YESBANK", "IDEA", "DLF", "DABUR"
+        "BEL", "BHEL", "IRCTC", "RVNL", "IREDA", "SUZLON", "YESBANK", "IDEA", "DLF", "DABUR", "KEI"
     ]
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
@@ -322,7 +326,7 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME IPO HUB (ONGOING, UPCOMING & AVOID LISTINGS) ---
+# --- 6. REAL-TIME IPO HUB ---
 @st.cache_data(ttl=900)
 def fetch_live_ipo_gmp():
     url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
@@ -462,7 +466,7 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
     return (total_polarity / len(articles)) if articles else 0, articles
 
-# --- 8. API KEY RETRIEVAL HELPER ---
+# --- 8. API KEY RETRIEVAL ---
 def get_gemini_api_key():
     try:
         if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
@@ -471,30 +475,57 @@ def get_gemini_api_key():
         pass
     return os.getenv("GEMINI_API_KEY", "").strip()
 
-# --- 9. REAL-TIME DATA CONTEXT BUILDER (PRICE + FINANCIAL STATEMENTS) ---
+# --- 9. CONVERSATIONAL ENTITY & CONTEXT RESOLVER ---
 def get_live_market_context_for_query(query: str):
+    """
+    Intelligently handles:
+    1. Direct entity switch (e.g. user mentions INFY or Tata Motors)
+    2. Context retention (e.g. user says 'is it safe to buy now?' -> refers back to active stock)
+    3. Broad market suggestions (e.g. 'which share to buy now?')
+    """
     normalized = re.sub(r"[()\[\],.?/:;!]", " ", query).upper()
     tokens = [w.strip() for w in normalized.split() if w.strip()]
 
     ticker_found = None
     company_name = None
 
+    # Step 1: Detect if a NEW stock symbol is explicitly present in the query
     for t in tokens:
         if t in ALL_NSE_STOCKS:
             ticker_found = f"{t}.NS"
             company_name = t
             break
 
+    # Step 2: Detect if a company name is explicitly present (e.g. "Reliance", "Tata Motors", "KEI Wires")
     if not ticker_found:
         clean_target = re.sub(
-            r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how)\b",
+            r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how|it|this|that|same|stock|company)\b",
             " ",
             query
         )
         search_term = re.sub(r"[()\[\],.?/:;!]", " ", clean_target)
         search_term = re.sub(r"\s+", " ", search_term).strip()
-        if search_term and len(search_term) >= 2:
+
+        # Only attempt search if remaining text is an actual named entity (length >= 3)
+        if search_term and len(search_term) >= 3:
             ticker_found, company_name = resolve_ticker_online(search_term)
+
+    # Step 3: Contextual Memory Fallback (Pronouns or implied subject)
+    # If the user says "is it safe to buy now?", "what is its PE?", "target for this?"
+    if not ticker_found and st.session_state.active_stock.get("symbol"):
+        padded_query = f" {normalized} "
+        pronoun_cues = [" IT ", " THIS ", " THAT ", " ITS ", " SAME ", " THE STOCK ", " THE SHARE ", " THE COMPANY ", " HOLD IT "]
+        is_follow_up = any(cue in padded_query for cue in pronoun_cues) or (
+            any(w in upper for w in ["BUY", "SELL", "HOLD", "SAFE", "TARGET", "PE", "PROFIT", "REVENUE", "HIKE", "FALL"]) 
+            and len(tokens) <= 7
+        )
+        if is_follow_up:
+            ticker_found = st.session_state.active_stock["symbol"]
+            company_name = st.session_state.active_stock["company"]
+
+    # Step 4: Persist or clear active stock memory
+    if ticker_found and company_name:
+        st.session_state.active_stock = {"symbol": ticker_found, "company": company_name}
 
     context_dict = {
         "ticker": ticker_found,
@@ -543,9 +574,9 @@ def get_live_market_context_for_query(query: str):
             if pm:
                 context_dict["profit_margin"] = round(pm * 100, 2)
 
-            lines = [f"[REAL-TIME METRICS FOR {company_name} ({ticker_found})]"]
+            lines = [f"[VERIFIED METRICS FOR ACTIVE STOCK: {company_name} ({ticker_found})]"]
             if context_dict["price"]:
-                lines.append(f"- Current Price (LTP): ₹{context_dict['price']:,.2f}")
+                lines.append(f"- Current Market Price (LTP): ₹{context_dict['price']:,.2f}")
             if context_dict["net_income_cr"]:
                 lines.append(f"- Annual Net Profit (Net Income): ₹{context_dict['net_income_cr']:,.2f} Crores")
             if context_dict["revenue_cr"]:
@@ -557,11 +588,11 @@ def get_live_market_context_for_query(query: str):
             if context_dict["eps"]:
                 lines.append(f"- EPS: ₹{context_dict['eps']}")
             if context_dict["rsi"]:
-                lines.append(f"- RSI (14): {context_dict['rsi']:.1f}")
+                lines.append(f"- 14-day RSI: {context_dict['rsi']:.1f}")
             if context_dict["sma_50"]:
                 lines.append(f"- 50-day SMA: ₹{context_dict['sma_50']:,.2f}")
             if context_dict["pe"]:
-                lines.append(f"- P/E Ratio: {context_dict['pe']}")
+                lines.append(f"- Trailing P/E: {context_dict['pe']}")
 
             context_dict["context_text"] = "\n".join(lines)
         except Exception:
@@ -569,11 +600,10 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. RESILIENT REST API CLIENT FOR GEMINI ---
+# --- 10. MULTI-MODEL RESILIENT REST API CALLER ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio with active models and header authentication."""
+    """Direct HTTP POST to Google AI Studio with active production endpoints."""
     active_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
-
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": api_key
@@ -585,7 +615,6 @@ def call_gemini_rest_api(prompt: str, api_key: str):
 
     last_error = ""
 
-    # 1. Primary sequence: Try standard production endpoints
     for model_name in active_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
@@ -602,14 +631,13 @@ def call_gemini_rest_api(prompt: str, api_key: str):
         except Exception as e:
             last_error = str(e)
 
-    # 2. Dynamic Model Discovery: Query Google for exact available models on this key
+    # Dynamic model discovery fallback
     try:
         list_url = "https://generativelanguage.googleapis.com/v1beta/models"
         list_resp = requests.get(list_url, headers=headers, timeout=8)
         if list_resp.status_code == 200:
-            available_models = list_resp.json().get("models", [])
-            for m in available_models:
-                m_name = m.get("name", "")  # e.g. "models/gemini-2.5-flash"
+            for m in list_resp.json().get("models", []):
+                m_name = m.get("name", "")
                 supported = m.get("supportedGenerationMethods", [])
                 if "generateContent" in supported and "flash" in m_name:
                     run_url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent"
@@ -623,23 +651,34 @@ def call_gemini_rest_api(prompt: str, api_key: str):
 
     return f"ERROR: {last_error}"
 
-# --- 11. STREAMING CHATBOT ORCHESTRATOR ---
+# --- 11. STREAMING CHATBOT ORCHESTRATOR WITH DIALOGUE MEMORY ---
 def stream_chatbot_response(user_query: str):
     api_key = get_gemini_api_key()
     context = get_live_market_context_for_query(user_query)
 
+    # Format recent conversation turns for context-awareness
+    recent_history = ""
+    if "chat_history" in st.session_state and len(st.session_state.chat_history) > 1:
+        for turn in st.session_state.chat_history[-4:]:
+            role = "User" if turn["role"] == "user" else "Assistant"
+            recent_history += f"{role}: {turn['content']}\n"
+
     # 1. Attempt AI Generation
     if api_key:
         prompt = f"""
-        You are an Indian Equity Market & Financial Intelligence Analyst.
-        Provide a concise, direct, professional answer to the user's question.
-        Use clean markdown bullet points, bold financial totals in ₹ Crores or %, and clear context.
-        Adhere to SEBI educational guidelines.
+        You are an Indian Equity Market & Financial Intelligence Analyst for the NSE/BSE.
+        Provide a concise, direct, professional answer to the user's latest question.
+        Use clean markdown bullet points, bold financial totals in ₹ Crores or %, and clear key support/resistance levels.
+        If the user uses pronouns like "it", "this share", or refers back to the prior topic, answer in relation to the active stock.
+        If the user switched to a completely different stock, address the new stock immediately.
 
-        VERIFIED LIVE DATA:
+        RECENT CONVERSATION HISTORY:
+        {recent_history}
+
+        VERIFIED LIVE DATA FOR ACTIVE ASSET:
         {context['context_text']}
 
-        USER QUESTION:
+        LATEST USER QUESTION:
         {user_query}
         """
         ai_reply = call_gemini_rest_api(prompt, api_key)
@@ -922,15 +961,20 @@ if active_tab == "📊 Market Watch":
     render_movers_dashboard()
 
 # ==============================================================================
-# TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT (STREAMING + REAL-TIME DATA)
+# TAB 2: UNIVERSAL INTERACTIVE STOCK CHATBOT (STREAMING + MULTI-TURN MEMORY)
 # ==============================================================================
 elif active_tab == "💬 Stock Chatbot":
     st.subheader("💬 Universal AI Stock & Market Advisor")
-    st.caption("Real-time technical indicators, live price discovery, and conversational financial analysis.")
+    
+    # Active Stock Indicator Pill
+    if st.session_state.active_stock.get("company"):
+        st.caption(f"📍 Active Context: **{st.session_state.active_stock['company']}** (`{st.session_state.active_stock['symbol']}`) | Ask follow-up questions or introduce a new stock.")
+    else:
+        st.caption("Real-time technical indicators, live price discovery, and multi-turn financial dialogue.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. Ask me anything, such as:\n- *'What is current year profit of Reliance?'*\n- *'Analyse INFY with latest price action'* \n- *'Which share is best to buy now?'* \n- *'Will Tata Motors cross its 50-day average?'*"}
+            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. You can ask consecutive questions in the same context, for example:\n1. *'What is current year profit of KEI Wires?'*\n2. *'Is it safe to buy it now?'*\n\nOr ask about another stock whenever you like!"}
         ]
 
     for msg in st.session_state.chat_history:
@@ -948,7 +992,7 @@ elif active_tab == "💬 Stock Chatbot":
             st.session_state.chat_history.append({"role": "assistant", "content": full_response})
 
 # ==============================================================================
-# TAB 3: LIVE IPOs & GMP TRACKER (FULL LIST INCLUDING AVOID OPTIONS)
+# TAB 3: LIVE IPOs & GMP TRACKER
 # ==============================================================================
 elif active_tab == "🚀 IPO Hub":
     st.subheader("🔥 Ongoing & Upcoming IPO Tracker (Mainboard & SME)")
@@ -1017,7 +1061,7 @@ elif active_tab == "🔍 Deep Dive":
             "Type or select stock symbol:",
             options=ALL_NSE_STOCKS,
             index=None,
-            placeholder="Type symbol (e.g. RELIANCE, TCS, INFY, TATAMOTORS)...",
+            placeholder="Type symbol (e.g. RELIANCE, TCS, INFY, TATAMOTORS, KEI)...",
             accept_new_options=True
         )
     with c_exch:
