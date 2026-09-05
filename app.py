@@ -477,26 +477,20 @@ def get_gemini_api_key():
 
 # --- 9. CONVERSATIONAL ENTITY & CONTEXT RESOLVER ---
 def get_live_market_context_for_query(query: str):
-    """
-    Intelligently handles:
-    1. Direct entity switch (e.g. user mentions INFY or Tata Motors)
-    2. Context retention (e.g. user says 'is it safe to buy now?' -> refers back to active stock)
-    3. Broad market suggestions (e.g. 'which share to buy now?')
-    """
     normalized = re.sub(r"[()\[\],.?/:;!]", " ", query).upper()
     tokens = [w.strip() for w in normalized.split() if w.strip()]
 
     ticker_found = None
     company_name = None
 
-    # Step 1: Detect if a NEW stock symbol is explicitly present in the query
+    # Step 1: Detect explicit NSE stock symbol in query
     for t in tokens:
         if t in ALL_NSE_STOCKS:
             ticker_found = f"{t}.NS"
             company_name = t
             break
 
-    # Step 2: Detect if a company name is explicitly present (e.g. "Reliance", "Tata Motors", "KEI Wires")
+    # Step 2: Detect company name online (e.g., "Reliance", "Tata Motors", "KEI Wires")
     if not ticker_found:
         clean_target = re.sub(
             r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how|it|this|that|same|stock|company)\b",
@@ -506,24 +500,22 @@ def get_live_market_context_for_query(query: str):
         search_term = re.sub(r"[()\[\],.?/:;!]", " ", clean_target)
         search_term = re.sub(r"\s+", " ", search_term).strip()
 
-        # Only attempt search if remaining text is an actual named entity (length >= 3)
         if search_term and len(search_term) >= 3:
             ticker_found, company_name = resolve_ticker_online(search_term)
 
-    # Step 3: Contextual Memory Fallback (Pronouns or implied subject)
-    # If the user says "is it safe to buy now?", "what is its PE?", "target for this?"
+    # Step 3: Contextual Memory Fallback (Pronouns or short follow-ups like "is it safe to buy now?")
     if not ticker_found and st.session_state.active_stock.get("symbol"):
         padded_query = f" {normalized} "
         pronoun_cues = [" IT ", " THIS ", " THAT ", " ITS ", " SAME ", " THE STOCK ", " THE SHARE ", " THE COMPANY ", " HOLD IT "]
         is_follow_up = any(cue in padded_query for cue in pronoun_cues) or (
-            any(w in upper for w in ["BUY", "SELL", "HOLD", "SAFE", "TARGET", "PE", "PROFIT", "REVENUE", "HIKE", "FALL"]) 
+            any(w in normalized for w in ["BUY", "SELL", "HOLD", "SAFE", "TARGET", "PE", "PROFIT", "REVENUE", "HIKE", "FALL"]) 
             and len(tokens) <= 7
         )
         if is_follow_up:
             ticker_found = st.session_state.active_stock["symbol"]
             company_name = st.session_state.active_stock["company"]
 
-    # Step 4: Persist or clear active stock memory
+    # Step 4: Persist active stock memory
     if ticker_found and company_name:
         st.session_state.active_stock = {"symbol": ticker_found, "company": company_name}
 
@@ -600,21 +592,28 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. MULTI-MODEL RESILIENT REST API CALLER ---
+# --- 10. MULTI-MODEL REST API CALLER WITH DYNAMIC FALLBACK ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio with active production endpoints."""
-    active_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+    """Direct HTTP POST to Google AI Studio with production models and dynamic model discovery."""
+    active_models = [
+        "gemini-3.1-pro-preview",
+        "gemini-3.7-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash"
+    ]
+
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": api_key
     }
     payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.2}
+        "contents": [{"parts": [{"text": prompt}]}]
     }
 
     last_error = ""
 
+    # Sequence 1: Test prioritized production model endpoints directly
     for model_name in active_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
@@ -631,7 +630,7 @@ def call_gemini_rest_api(prompt: str, api_key: str):
         except Exception as e:
             last_error = str(e)
 
-    # Dynamic model discovery fallback
+    # Sequence 2: Dynamic discovery fallback (find any active generateContent models on this key)
     try:
         list_url = "https://generativelanguage.googleapis.com/v1beta/models"
         list_resp = requests.get(list_url, headers=headers, timeout=8)
@@ -639,7 +638,7 @@ def call_gemini_rest_api(prompt: str, api_key: str):
             for m in list_resp.json().get("models", []):
                 m_name = m.get("name", "")
                 supported = m.get("supportedGenerationMethods", [])
-                if "generateContent" in supported and "flash" in m_name:
+                if "generateContent" in supported:
                     run_url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent"
                     resp = requests.post(run_url, headers=headers, json=payload, timeout=12)
                     if resp.status_code == 200:
@@ -651,12 +650,12 @@ def call_gemini_rest_api(prompt: str, api_key: str):
 
     return f"ERROR: {last_error}"
 
-# --- 11. STREAMING CHATBOT ORCHESTRATOR WITH DIALOGUE MEMORY ---
+# --- 11. STREAMING CHATBOT ORCHESTRATOR WITH MULTI-TURN MEMORY ---
 def stream_chatbot_response(user_query: str):
     api_key = get_gemini_api_key()
     context = get_live_market_context_for_query(user_query)
 
-    # Format recent conversation turns for context-awareness
+    # Format dialogue turns for context tracking
     recent_history = ""
     if "chat_history" in st.session_state and len(st.session_state.chat_history) > 1:
         for turn in st.session_state.chat_history[-4:]:
@@ -966,15 +965,14 @@ if active_tab == "📊 Market Watch":
 elif active_tab == "💬 Stock Chatbot":
     st.subheader("💬 Universal AI Stock & Market Advisor")
     
-    # Active Stock Indicator Pill
     if st.session_state.active_stock.get("company"):
-        st.caption(f"📍 Active Context: **{st.session_state.active_stock['company']}** (`{st.session_state.active_stock['symbol']}`) | Ask follow-up questions or introduce a new stock.")
+        st.caption(f"📍 Active Context: **{st.session_state.active_stock['company']}** (`{st.session_state.active_stock['symbol']}`) | Ask follow-ups or introduce any new stock.")
     else:
         st.caption("Real-time technical indicators, live price discovery, and multi-turn financial dialogue.")
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. You can ask consecutive questions in the same context, for example:\n1. *'What is current year profit of KEI Wires?'*\n2. *'Is it safe to buy it now?'*\n\nOr ask about another stock whenever you like!"}
+            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. You can ask consecutive questions in the same context, for example:\n1. *'What is current year profit of KEI Wires?'*\n2. *'Is it safe to buy it now?'*\n\nOr ask about a new stock whenever you like!"}
         ]
 
     for msg in st.session_state.chat_history:
