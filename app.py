@@ -7,23 +7,12 @@ import requests
 import io
 import os
 import re
+import json
 import time as time_module
 from datetime import datetime, time
 import pytz
 from bs4 import BeautifulSoup
 from textblob import TextBlob
-
-# Optional GenAI LLM Client import
-try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
-
-# --- CONFIGURATION & CREDENTIALS ---
-# Replace with your newly generated private key if testing locally without secrets.toml
-DEFAULT_KEY_FALLBACK = ""
 
 # --- MOBILE-FIRST PAGE CONFIGURATION ---
 st.set_page_config(
@@ -473,115 +462,208 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
     return (total_polarity / len(articles)) if articles else 0, articles
 
-# --- 8. REAL-TIME DATA CONTEXT BUILDER FOR AI ---
-def get_live_market_context_for_query(query: str):
-    words = [w.strip(" ?.,!").upper() for w in query.split()]
-    direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
-    clean_target = re.sub(
-        r"(?i)\b(analiyse|analyse|analyze|analysis|check|review|details|will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how)\b",
-        " ",
-        query
-    )
-    search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
+# --- 8. API KEY RETRIEVAL HELPER ---
+def get_gemini_api_key():
+    """Extracts the Gemini API Key from Streamlit Secrets or Environment."""
+    try:
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            return str(st.secrets["GEMINI_API_KEY"]).strip()
+    except Exception:
+        pass
+    return os.getenv("GEMINI_API_KEY", "").strip()
 
-    context_str = ""
+# --- 9. REAL-TIME DATA CONTEXT BUILDER (PRICE + FINANCIAL STATEMENTS) ---
+def get_live_market_context_for_query(query: str):
+    normalized = re.sub(r"[()\[\],.?/:;!]", " ", query).upper()
+    tokens = [w.strip() for w in normalized.split() if w.strip()]
+
     ticker_found = None
     company_name = None
 
-    if direct_symbol:
-        ticker_found = f"{direct_symbol}.NS"
-        company_name = direct_symbol
-    elif search_term and len(search_term) >= 2:
-        ticker_found, company_name = resolve_ticker_online(search_term)
+    for t in tokens:
+        if t in ALL_NSE_STOCKS:
+            ticker_found = f"{t}.NS"
+            company_name = t
+            break
+
+    if not ticker_found:
+        clean_target = re.sub(
+            r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how)\b",
+            " ",
+            query
+        )
+        search_term = re.sub(r"[()\[\],.?/:;!]", " ", clean_target)
+        search_term = re.sub(r"\s+", " ", search_term).strip()
+        if search_term and len(search_term) >= 2:
+            ticker_found, company_name = resolve_ticker_online(search_term)
+
+    context_dict = {
+        "ticker": ticker_found,
+        "company": company_name,
+        "price": None,
+        "rsi": None,
+        "sma_50": None,
+        "pe": None,
+        "roe": None,
+        "net_income_cr": None,
+        "revenue_cr": None,
+        "ebitda_cr": None,
+        "eps": None,
+        "profit_margin": None,
+        "context_text": ""
+    }
 
     if ticker_found:
         try:
             stock = yf.Ticker(ticker_found)
-            hist = stock.history(period="6mo")
+            info = stock.info or {}
+            hist = stock.history(period="3mo")
+
             if not hist.empty:
-                curr_price = float(hist["Close"].iloc[-1])
-                rsi = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
-                sma_50 = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
-                sma_200 = float(ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator().iloc[-1]) if len(hist) >= 150 else None
-                info = stock.info or {}
-                roe = (info.get("returnOnEquity") or 0) * 100
-                pe = info.get("trailingPE", "N/A")
-                debt_eq = info.get("debtToEquity", "N/A")
+                context_dict["price"] = float(hist["Close"].iloc[-1])
+                context_dict["rsi"] = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
+                context_dict["sma_50"] = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
 
-                context_str += f"\n[REAL-TIME STOCK DATA FOR {company_name} ({ticker_found})]\n"
-                context_str += f"- Live Traded Price (LTP): ₹{curr_price:,.2f}\n"
-                context_str += f"- RSI (14): {rsi:.2f}\n"
-                context_str += f"- 50-day SMA: ₹{sma_50:.2f} (Price is {'ABOVE' if curr_price >= sma_50 else 'BELOW'})\n"
-                if sma_200:
-                    context_str += f"- 200-day SMA: ₹{sma_200:.2f}\n"
-                context_str += f"- P/E Ratio: {pe}, ROE: {roe:.2f}%, Debt-to-Equity: {debt_eq}\n"
+            context_dict["pe"] = info.get("trailingPE", "N/A")
+            context_dict["roe"] = round((info.get("returnOnEquity") or 0) * 100, 2)
+            context_dict["eps"] = info.get("trailingEps")
+
+            net_inc = info.get("netIncomeToCommon")
+            if net_inc:
+                context_dict["net_income_cr"] = round(net_inc / 1e7, 2)
+
+            rev = info.get("totalRevenue")
+            if rev:
+                context_dict["revenue_cr"] = round(rev / 1e7, 2)
+
+            ebitda = info.get("ebitda")
+            if ebitda:
+                context_dict["ebitda_cr"] = round(ebitda / 1e7, 2)
+
+            pm = info.get("profitMargins")
+            if pm:
+                context_dict["profit_margin"] = round(pm * 100, 2)
+
+            # Build readable context prompt
+            lines = [f"[REAL-TIME METRICS FOR {company_name} ({ticker_found})]"]
+            if context_dict["price"]:
+                lines.append(f"- Current Price (LTP): ₹{context_dict['price']:,.2f}")
+            if context_dict["net_income_cr"]:
+                lines.append(f"- Annual Net Profit (Net Income): ₹{context_dict['net_income_cr']:,.2f} Crores")
+            if context_dict["revenue_cr"]:
+                lines.append(f"- Annual Revenue: ₹{context_dict['revenue_cr']:,.2f} Crores")
+            if context_dict["ebitda_cr"]:
+                lines.append(f"- EBITDA: ₹{context_dict['ebitda_cr']:,.2f} Crores")
+            if context_dict["profit_margin"]:
+                lines.append(f"- Profit Margin: {context_dict['profit_margin']}%")
+            if context_dict["eps"]:
+                lines.append(f"- EPS: ₹{context_dict['eps']}")
+            if context_dict["rsi"]:
+                lines.append(f"- RSI (14): {context_dict['rsi']:.1f}")
+            if context_dict["sma_50"]:
+                lines.append(f"- 50-day SMA: ₹{context_dict['sma_50']:,.2f}")
+            if context_dict["pe"]:
+                lines.append(f"- P/E Ratio: {context_dict['pe']}")
+
+            context_dict["context_text"] = "\n".join(lines)
         except Exception:
             pass
 
-    if any(k in query.upper() for k in ["BEST", "BUY", "TODAY", "MARKET", "GAINERS", "LOSERS", "NOW"]):
-        g, l, d = get_live_market_data(ALL_NSE_STOCKS)
-        lows = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
-        context_str += "\n[CURRENT TOP MARKET MOVERS]\n"
-        if not g.empty:
-            context_str += f"- Top Gainers: {', '.join(g['Stock'].head(3).tolist())}\n"
-        if not l.empty:
-            context_str += f"- Top Losers: {', '.join(l['Stock'].head(3).tolist())}\n"
-        if not lows.empty:
-            context_str += f"- Quality Stocks at 52-Week Lows: {', '.join(lows['Stock'].head(3).tolist())}\n"
+    return context_dict
 
-    return context_str
+# --- 10. BULLETPROOF GEMINI REST API CLIENT ---
+def call_gemini_rest_api(prompt: str, api_key: str):
+    """Direct HTTP POST to Google AI Studio REST API, bypassing SDK version conflicts."""
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2}
+    }
 
-# --- 9. INTERACTIVE STREAMING CHATBOT GENERATOR ---
-def stream_chatbot_response(user_query: str):
-    api_key = (
-        st.secrets.get("GEMINI_API_KEY") 
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets 
-        else os.getenv("GEMINI_API_KEY", DEFAULT_KEY_FALLBACK)
-    )
-
-    live_context = get_live_market_context_for_query(user_query)
-
-    if GENAI_AVAILABLE and api_key:
+    last_error = ""
+    for model_name in models_to_try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
         try:
-            client = genai.Client(api_key=api_key)
-            prompt = f"""
-            You are a seasoned Indian Equity Market Analyst for the NSE & BSE.
-            Provide a crisp, professional, mobile-friendly answer using bullet points and clear bold targets.
-            Include key levels (Entry, Stop-Loss, Target), indicator interpretations (RSI, 50/200 SMA), and risk caveats.
-            Always adhere to SEBI educational guidelines.
+            resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=12)
+            if resp.status_code == 200:
+                result = resp.json()
+                candidates = result.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "")
+            else:
+                last_error = f"HTTP {resp.status_code}: {resp.text}"
+        except Exception as e:
+            last_error = str(e)
 
-            LIVE MARKET DATA CONTEXT:
-            {live_context}
+    return f"ERROR: {last_error}"
 
-            USER QUESTION:
-            {user_query}
-            """
-            response = client.models.generate_content_stream(
-                model="gemini-2.5-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.2)
-            )
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+# --- 11. STREAMING CHATBOT ORCHESTRATOR ---
+def stream_chatbot_response(user_query: str):
+    api_key = get_gemini_api_key()
+    context = get_live_market_context_for_query(user_query)
+
+    # 1. Attempt Live AI Generation if Key is present
+    if api_key:
+        prompt = f"""
+        You are an Indian Equity Market & Financial Intelligence Analyst.
+        Provide a concise, direct, professional answer to the user's question.
+        Use clean markdown bullet points, bold financial totals in ₹ Crores or %, and clear context.
+        Adhere to SEBI educational guidelines.
+
+        VERIFIED LIVE DATA:
+        {context['context_text']}
+
+        USER QUESTION:
+        {user_query}
+        """
+        ai_reply = call_gemini_rest_api(prompt, api_key)
+        if ai_reply and not ai_reply.startswith("ERROR:"):
+            for word in ai_reply.split(" "):
+                yield word + " "
+                time_module.sleep(0.01)
             return
-        except Exception:
-            pass
+        else:
+            yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
 
-    static_reply = process_universal_chatbot_static(user_query, live_context)
+    # 2. Heuristic Rule Engine Fallback (Directly answers Profit, Revenue, and Movements)
+    static_reply = process_universal_chatbot_static(user_query, context)
     for word in static_reply.split(" "):
         yield word + " "
         time_module.sleep(0.015)
 
-def process_universal_chatbot_static(user_query: str, live_context: str = ""):
-    raw_query = user_query.strip()
-    upper = raw_query.upper()
+def process_universal_chatbot_static(user_query: str, context: dict):
+    upper = user_query.upper()
+    comp = context.get("company")
+    ticker = context.get("ticker")
 
+    # Intent 1: Profit / Revenue / Financial Results
+    if any(w in upper for w in ["PROFIT", "REVENUE", "INCOME", "EARNING", "FINANCIAL", "RESULTS", "EBITDA", "MARGIN"]):
+        if comp:
+            net_profit_str = f"₹{context['net_income_cr']:,.2f} Crores" if context.get("net_income_cr") else "See latest annual report filings"
+            rev_str = f"₹{context['revenue_cr']:,.2f} Crores" if context.get("revenue_cr") else "N/A"
+            margin_str = f"{context['profit_margin']}%" if context.get("profit_margin") else "N/A"
+            eps_str = f"₹{context['eps']}" if context.get("eps") else "N/A"
+            pe_str = f"{context['pe']}" if context.get("pe") else "N/A"
+
+            return (
+                f"### 📊 Financial Performance Snapshot: **{comp}** (`{ticker}`)\n\n"
+                f"- **Annual Net Profit (Net Income):** **{net_profit_str}**\n"
+                f"- **Annual Revenue (Turnover):** **{rev_str}**\n"
+                f"- **Net Profit Margin:** **{margin_str}**\n"
+                f"- **Earnings Per Share (EPS):** **{eps_str}**\n"
+                f"- **P/E Valuation Ratio:** **{pe_str}**\n\n"
+                f"> **Context:** Corporate earnings reflect consolidated full-year performance. For quarterly breakdowns, track quarterly filing announcements on NSE/BSE."
+            )
+
+    # Intent 2: Broad Stock Recommendations
     if any(k in upper for k in [
         "WHICH SHARE IS BEST TO BUY", "WHICH STOCK IS BEST TO BUY", "WHAT TO BUY NOW",
         "WHICH SHARE TO BUY TODAY", "BEST SHARE TO BUY NOW", "BEST STOCK TO BUY",
         "TOP SHARES TO BUY", "SUGGEST ME A SHARE", "RECOMMEND A STOCK", "WHAT SHOULD I BUY"
-    ]) or (("BEST" in upper or "WHICH" in upper) and "BUY" in upper and len(raw_query.split()) <= 10):
+    ]) or (("BEST" in upper or "WHICH" in upper) and "BUY" in upper and len(user_query.split()) <= 10):
 
         gainers, losers, _ = get_live_market_data(ALL_NSE_STOCKS)
         low_52w = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
@@ -622,112 +704,68 @@ def process_universal_chatbot_static(user_query: str, live_context: str = ""):
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
-    words = [w.strip(" ?.,!").upper() for w in raw_query.split()]
-    direct_symbol = next((w for w in words if w in ALL_NSE_STOCKS), None)
+    # Intent 3: Price Direction / Targets
+    if comp and any(w in upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
+        curr_price = context.get("price") or 0.0
+        rsi = context.get("rsi") or 50.0
+        sma_50 = context.get("sma_50") or curr_price
+        is_bullish = (rsi < 65) and (curr_price >= sma_50)
+        bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
 
-    if direct_symbol:
-        ticker_symbol = f"{direct_symbol}.NS"
-        company_name = direct_symbol
-    else:
-        clean_target = re.sub(
-            r"(?i)\b(analiyse|analyse|analyze|analysis|check|review|details|will|the|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|is|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|what|how)\b",
-            " ",
-            raw_query
-        )
-        search_term = re.sub(r"\s+", " ", clean_target).strip(" ?.,!")
-
-        if not search_term or len(search_term) < 2:
-            return (
-                "I'm your Indian Equities Assistant! You can ask me:\n"
-                "- *'Analyse INFY'*\n"
-                "- *'Which share is best to buy now?'*\n"
-                "- *'Will Infosys price hike in next few days?'*\n"
-                "- *'Is Tata Motors safe to hold for long term?'*"
-            )
-
-        ticker_symbol, company_name = resolve_ticker_online(search_term)
-
-    if not ticker_symbol:
         return (
-            f"I searched online for **'{search_term}'** but could not find a matching equity ticker on NSE/BSE. "
-            "Please check the spelling or provide the direct ticker symbol (e.g. INFY, TATAMOTORS, RELIANCE)."
+            f"### Short-Term Outlook for **{comp}** (`{ticker}`)\n\n"
+            f"- **Current Market Price (LTP):** ₹{curr_price:,.2f}\n"
+            f"- **14-Day RSI:** {rsi:.1f} " + ("*(Overbought)*" if rsi > 70 else "*(Oversold)*" if rsi < 35 else "*(Neutral)*") + "\n"
+            f"- **50-Day Moving Average:** ₹{sma_50:,.2f} (" + ("Price is Above" if curr_price >= sma_50 else "Price is Below") + ")\n\n"
+            f"**Verdict:** **{bias}**\n\n" +
+            (
+                f"Momentum favors buyers above ₹{sma_50:,.2f}. Estimated swing targets: **₹{curr_price * 1.04:,.2f} – ₹{curr_price * 1.07:,.2f}**, with stop-loss protection near **₹{curr_price * 0.97:,.2f}**."
+                if is_bullish else
+                f"A sudden sharp hike is less probable over immediate sessions due to moving average resistance or cooling momentum. Wait for consolidation before taking fresh long positions."
+            )
         )
 
-    try:
-        stock = yf.Ticker(ticker_symbol)
-        hist = stock.history(period="6mo")
-        if hist.empty or len(hist) < 25:
-            return f"Found **{company_name}** (`{ticker_symbol}`), but insufficient trading history was returned from the exchange."
+    # Intent 4: Long-Term Safety / Fundamentals
+    if comp and any(w in upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
+        roe = context.get("roe") or 0.0
+        pe = context.get("pe")
+        curr_price = context.get("price") or 0.0
+        health = "Strong & Resilient" if roe >= 15.0 else "Moderate"
 
-        info = stock.info or {}
-        curr_price = float(hist["Close"].iloc[-1])
-        rsi = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
-        sma_50 = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
-        roe = info.get("returnOnEquity") or 0.0
-        pe = info.get("trailingPE", "N/A")
-
-        if any(w in upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
-            is_bullish = (rsi < 65) and (curr_price >= sma_50)
-            bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
-
-            rsi_desc = (
-                f"{rsi:.1f} (Overbought — risk of pause)" if rsi > 70
-                else f"{rsi:.1f} (Oversold — high rebound probability)" if rsi < 35
-                else f"{rsi:.1f} (Neutral momentum)"
+        return (
+            f"### Fundamental Assessment for **{comp}** (`{ticker}`)\n\n"
+            f"- **Current Price:** ₹{curr_price:,.2f}\n"
+            f"- **Return on Equity (ROE):** {roe}%\n"
+            f"- **Trailing P/E Ratio:** {pe}\n\n"
+            f"**Verdict:** Long-term profile is **{health}**.\n\n" +
+            (
+                "Strong capital returns and balance sheet health support staggered long-term accumulation on pullbacks."
+                if roe >= 15.0 else
+                "Return ratios are moderate. Track upcoming quarterly margin sustainability before committing long-term capital."
             )
-            sma_desc = (
-                f"Above 50-day SMA (₹{sma_50:.2f}) — confirms short-term trend strength."
-                if curr_price >= sma_50
-                else f"Below 50-day SMA (₹{sma_50:.2f}) — near-term resistance active."
-            )
+        )
 
-            return (
-                f"### Analysis for **{company_name}** (`{ticker_symbol}`)\n\n"
-                f"- **Current Market Price (LTP):** ₹{curr_price:,.2f}\n"
-                f"- **14-Day RSI:** {rsi_desc}\n"
-                f"- **50-Day Moving Average:** {sma_desc}\n\n"
-                f"**Will price hike in the next few days?**\n"
-                f"**Verdict:** **{bias}**\n\n" +
-                (
-                    f"Momentum favors buyers above ₹{sma_50:.2f}. "
-                    f"Estimated swing targets: **₹{curr_price * 1.04:,.2f} – ₹{curr_price * 1.07:,.2f}**, "
-                    f"with stop-loss protection near **₹{curr_price * 0.97:,.2f}**."
-                    if is_bullish else
-                    f"A sudden sharp hike is less probable over immediate sessions due to moving average resistance or cooling momentum. "
-                    f"Wait for consolidation or a test of key support before taking fresh long positions."
-                )
-            )
+    # Fallback Overview
+    if comp:
+        return (
+            f"### Snapshot for **{comp}** (`{ticker}`)\n\n"
+            f"- **Live Price (LTP):** ₹{context.get('price', 0.0):,.2f}\n"
+            f"- **Annual Net Profit:** ₹{context.get('net_income_cr', 0.0):,.2f} Crores\n"
+            f"- **RSI (14):** {context.get('rsi', 0.0):.1f}\n"
+            f"- **Trailing P/E:** {context.get('pe', 'N/A')}\n\n"
+            f"You can ask:\n"
+            f"- *'What is the current year profit of {comp}?'*\n"
+            f"- *'Will {comp} price increase in the next few days?'*\n"
+            f"- *'Is {comp} fundamentally safe to hold?'*"
+        )
 
-        elif any(w in upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
-            health = "Strong & Resilient" if (roe >= 0.15) else "Moderate / Requires Selective Entry"
-            roe_display = f"{roe * 100:.1f}%" if roe else "N/A"
-
-            return (
-                f"### Fundamental Assessment for **{company_name}** (`{ticker_symbol}`)\n\n"
-                f"- **Current Price:** ₹{curr_price:,.2f}\n"
-                f"- **Return on Equity (ROE):** {roe_display}\n"
-                f"- **Trailing P/E Ratio:** {pe}\n\n"
-                f"**Verdict:** Long-term profile is **{health}**.\n\n" +
-                (
-                    "Strong capital returns and balance sheet health support staggered long-term accumulation on market pullbacks."
-                    if roe >= 0.15 else
-                    "Return ratios are moderate. Track quarterly margin sustainability before committing large long-term capital."
-                )
-            )
-
-        else:
-            return (
-                f"### Snapshot for **{company_name}** (`{ticker_symbol}`)\n\n"
-                f"- **Price (LTP):** ₹{curr_price:,.2f}\n"
-                f"- **RSI (14):** {rsi:.1f}\n"
-                f"- **50-Day SMA:** ₹{sma_50:.2f}\n"
-                f"- **P/E Ratio:** {pe}\n\n"
-                f"You can ask:\n"
-                f"- *'Will {company_name} price hike in the next few days?'*\n"
-                f"- *'Is {company_name} fundamentally safe for long-term holding?'*"
-            )
-    except Exception as e:
-        return f"Error retrieving real-time data for **{company_name}** (`{ticker_symbol}`): {e}"
+    return (
+        "Please mention a specific stock or query. For example:\n"
+        "- *'What is current year profit of Reliance?'*\n"
+        "- *'Which share is best to buy now?'*\n"
+        "- *'Analyse INFY'* \n"
+        "- *'Will Tata Motors price hike in the next few days?'*"
+    )
 
 # --- COMBINED PINNED MASTER BAR (HEADER + PERSISTENT TABS) ---
 tabs_list = [
@@ -752,7 +790,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Active tab selection reference
 active_tab = st.session_state.current_tab
 
 # ==============================================================================
@@ -870,7 +907,7 @@ elif active_tab == "💬 Stock Chatbot":
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = [
-            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. Ask me anything, such as:\n- *'Analyse INFY with latest price action'* \n- *'Which share is best to buy now?'* \n- *'Will Tata Motors cross its 50-day average?'* \n- *'What is RSI and how do I trade it?'*"}
+            {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. Ask me anything, such as:\n- *'What is current year profit of Reliance?'*\n- *'Analyse INFY with latest price action'* \n- *'Which share is best to buy now?'* \n- *'Will Tata Motors cross its 50-day average?'*"}
         ]
 
     for msg in st.session_state.chat_history:
