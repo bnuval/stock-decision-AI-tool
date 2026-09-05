@@ -612,21 +612,28 @@ def get_available_gemini_models(api_key: str):
                 if "generateContent" in methods:
                     valid_models.append(name)
             
-            # Prioritize fast, production-ready Flash models
+            # Prioritize current active models
             valid_models.sort(key=lambda x: (
-                0 if "2.0-flash" in x else
-                1 if "3.8-flash" in x else
+                0 if "3.6-flash" in x else
+                1 if "3.5-flash-lite" in x else
                 2 if "3.7-flash" in x else
-                3 if "3.6-flash" in x else
-                4 if "flash" in x else 5
+                3 if "3.8-flash" in x else
+                4 if "3.1-pro" in x else
+                5 if "flash" in x else 6
             ))
             if valid_models:
                 return valid_models
     except Exception:
         pass
     
-    # Universal fallback list if list endpoint times out
-    return ["gemini-2.0-flash", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash-lite"]
+    # Universal active production endpoints
+    return [
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.7-flash",
+        "gemini-3.8-flash",
+        "gemini-3.1-pro-preview"
+    ]
 
 
 def call_gemini_rest_api(prompt: str, api_key: str):
