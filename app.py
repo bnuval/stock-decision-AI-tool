@@ -36,7 +36,7 @@ if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "di
     }
     st.session_state.current_tab = nav_map[query_params["nav"]]
 
-# --- CSS: FIXED HEADER + STICKY TABS ROW ---
+# --- CSS: FIXED HEADER + PERSISTENT TABS ROW ---
 st.markdown("""
 <style>
     header[data-testid="stHeader"] {
@@ -464,7 +464,6 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
 # --- 8. API KEY RETRIEVAL HELPER ---
 def get_gemini_api_key():
-    """Extracts the Gemini API Key from Streamlit Secrets or Environment."""
     try:
         if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
             return str(st.secrets["GEMINI_API_KEY"]).strip()
@@ -544,7 +543,6 @@ def get_live_market_context_for_query(query: str):
             if pm:
                 context_dict["profit_margin"] = round(pm * 100, 2)
 
-            # Build readable context prompt
             lines = [f"[REAL-TIME METRICS FOR {company_name} ({ticker_found})]"]
             if context_dict["price"]:
                 lines.append(f"- Current Price (LTP): ₹{context_dict['price']:,.2f}")
@@ -571,21 +569,27 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. BULLETPROOF GEMINI REST API CLIENT ---
+# --- 10. RESILIENT REST API CLIENT FOR GEMINI ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio REST API, bypassing SDK version conflicts."""
-    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
-    headers = {"Content-Type": "application/json"}
+    """Direct HTTP POST to Google AI Studio with active models and header authentication."""
+    active_models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key
+    }
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": 0.2}
     }
 
     last_error = ""
-    for model_name in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+
+    # 1. Primary sequence: Try standard production endpoints
+    for model_name in active_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
-            resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=12)
+            resp = requests.post(url, headers=headers, json=payload, timeout=12)
             if resp.status_code == 200:
                 result = resp.json()
                 candidates = result.get("candidates", [])
@@ -594,9 +598,28 @@ def call_gemini_rest_api(prompt: str, api_key: str):
                     if parts:
                         return parts[0].get("text", "")
             else:
-                last_error = f"HTTP {resp.status_code}: {resp.text}"
+                last_error = f"{model_name} -> HTTP {resp.status_code}: {resp.text}"
         except Exception as e:
             last_error = str(e)
+
+    # 2. Dynamic Model Discovery: Query Google for exact available models on this key
+    try:
+        list_url = "https://generativelanguage.googleapis.com/v1beta/models"
+        list_resp = requests.get(list_url, headers=headers, timeout=8)
+        if list_resp.status_code == 200:
+            available_models = list_resp.json().get("models", [])
+            for m in available_models:
+                m_name = m.get("name", "")  # e.g. "models/gemini-2.5-flash"
+                supported = m.get("supportedGenerationMethods", [])
+                if "generateContent" in supported and "flash" in m_name:
+                    run_url = f"https://generativelanguage.googleapis.com/v1beta/{m_name}:generateContent"
+                    resp = requests.post(run_url, headers=headers, json=payload, timeout=12)
+                    if resp.status_code == 200:
+                        parts = resp.json().get("candidates", [])[0].get("content", {}).get("parts", [])
+                        if parts:
+                            return parts[0].get("text", "")
+    except Exception:
+        pass
 
     return f"ERROR: {last_error}"
 
@@ -605,7 +628,7 @@ def stream_chatbot_response(user_query: str):
     api_key = get_gemini_api_key()
     context = get_live_market_context_for_query(user_query)
 
-    # 1. Attempt Live AI Generation if Key is present
+    # 1. Attempt AI Generation
     if api_key:
         prompt = f"""
         You are an Indian Equity Market & Financial Intelligence Analyst.
@@ -628,7 +651,7 @@ def stream_chatbot_response(user_query: str):
         else:
             yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
 
-    # 2. Heuristic Rule Engine Fallback (Directly answers Profit, Revenue, and Movements)
+    # 2. Heuristic Rule Engine Fallback
     static_reply = process_universal_chatbot_static(user_query, context)
     for word in static_reply.split(" "):
         yield word + " "
