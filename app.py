@@ -490,7 +490,7 @@ def get_live_market_context_for_query(query: str):
             company_name = t
             break
 
-    # Step 2: Detect company name online (e.g., "Reliance", "Tata Motors", "KEI Wires")
+    # Step 2: Detect company name online (e.g. "Reliance", "Tata Motors", "KEI Wires")
     if not ticker_found:
         clean_target = re.sub(
             r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how|it|this|that|same|stock|company)\b",
@@ -592,15 +592,14 @@ def get_live_market_context_for_query(query: str):
 
     return context_dict
 
-# --- 10. MULTI-MODEL REST API CALLER WITH DYNAMIC FALLBACK ---
+# --- 10. MULTI-MODEL REST API CALLER WITH ACTIVE GEMINI ENDPOINTS ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio with production models and dynamic model discovery."""
+    """Direct HTTP POST to Google AI Studio prioritizing active endpoints."""
     active_models = [
-        "gemini-3.1-pro-preview",
-        "gemini-3.7-flash",
         "gemini-3.6-flash",
+        "gemini-3.1-pro-preview",
         "gemini-3.5-flash",
-        "gemini-2.5-flash"
+        "gemini-3-flash"
     ]
 
     headers = {
@@ -630,7 +629,7 @@ def call_gemini_rest_api(prompt: str, api_key: str):
         except Exception as e:
             last_error = str(e)
 
-    # Sequence 2: Dynamic discovery fallback (find any active generateContent models on this key)
+    # Sequence 2: Dynamic discovery fallback (queries any enabled generateContent model on your key)
     try:
         list_url = "https://generativelanguage.googleapis.com/v1beta/models"
         list_resp = requests.get(list_url, headers=headers, timeout=8)
