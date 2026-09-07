@@ -277,12 +277,17 @@ def get_live_market_data(universe):
     except Exception:
         return pd.DataFrame(), pd.DataFrame(), last_session_date
 
-# --- 5. TOP 3 52-WEEK LOW PICKS ---
+# --- 5. TOP 3 PICKS: 52-WEEK LOW + STRICT TECHNICAL BUY SIGNAL ---
 @st.cache_data(ttl=300)
 def screen_52w_low_strong_picks(universe):
+    """
+    Screens fundamentally strong candidates close to 52-week low THAT ALSO
+    have Technical Analysis in favor of a BUY (Confluence of RSI + EMA + MACD).
+    """
     candidate_symbols = [
         "HINDUNILVR", "DABUR", "ITC", "IRCTC", "INFY", "TCS", "HDFCBANK",
-        "KOTAKBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO", "TATAMOTORS"
+        "KOTAKBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO", "TATAMOTORS",
+        "RELIANCE", "LT", "ICICIBANK", "AXISBANK", "SBIN"
     ]
     tickers = [f"{s}.NS" for s in candidate_symbols]
 
@@ -297,13 +302,55 @@ def screen_52w_low_strong_picks(universe):
         for symbol in candidate_symbols:
             t = f"{symbol}.NS"
             series = data[t].dropna() if t in data.columns else (data[symbol].dropna() if symbol in data.columns else None)
-            if series is not None and len(series) >= 50:
+            if series is not None and len(series) >= 60:
                 curr_price = float(series.iloc[-1])
                 low_52w = float(series.min())
                 high_52w = float(series.max())
 
-                if low_52w > 0:
-                    dist_from_low = ((curr_price - low_52w) / low_52w) * 100
+                if low_52w <= 0:
+                    continue
+
+                dist_from_low = ((curr_price - low_52w) / low_52w) * 100
+
+                # Must be within 18% of its 52-week low to qualify for value support
+                if dist_from_low > 18.0:
+                    continue
+
+                # --- TECHNICAL ANALYSIS FILTER ---
+                # 1. 14-day RSI
+                rsi_series = ta.momentum.RSIIndicator(series, window=14).rsi()
+                rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+
+                # 2. 20-day EMA (short-term momentum trend)
+                ema_20_series = ta.trend.EMAIndicator(series, window=20).ema_indicator()
+                ema_20 = float(ema_20_series.iloc[-1]) if not ema_20_series.empty else curr_price
+
+                # 3. MACD
+                macd_obj = ta.trend.MACD(series)
+                macd_line = float(macd_obj.macd().iloc[-1])
+                macd_sig = float(macd_obj.macd_signal().iloc[-1])
+
+                # Technical Confirmation Rules:
+                # - RSI should not be overbought (> 65) and not in a freefall spiral (< 28)
+                # - Price must hold near or cross above 20 EMA, OR MACD line above signal
+                rsi_ok = (30.0 <= rsi_val <= 65.0)
+                momentum_ok = (curr_price >= ema_20 * 0.985) or (macd_line >= macd_sig)
+
+                tech_score = 0
+                tech_notes = []
+
+                if rsi_ok:
+                    tech_score += 1
+                    tech_notes.append(f"RSI ({rsi_val:.1f}) in healthy reversal zone")
+                if curr_price >= ema_20:
+                    tech_score += 1
+                    tech_notes.append(f"Trading above 20-day EMA (₹{ema_20:.2f})")
+                if macd_line >= macd_sig:
+                    tech_score += 1
+                    tech_notes.append("MACD holds bullish crossover")
+
+                # Strictly require technical indicators to be IN FAVOR (tech_score >= 2)
+                if tech_score >= 2 and momentum_ok:
                     sl_short = round(low_52w * 0.98, 2)
                     target_short = round(curr_price * 1.08, 2)
                     sl_long = round(low_52w * 0.95, 2)
@@ -315,6 +362,9 @@ def screen_52w_low_strong_picks(universe):
                         "52W Low": round(low_52w, 2),
                         "52W High": round(high_52w, 2),
                         "Dist %": round(dist_from_low, 2),
+                        "RSI": round(rsi_val, 1),
+                        "Technical Setup": " • ".join(tech_notes),
+                        "Technical Verdict": "🟢 Bullish Reversal",
                         "Short SL": sl_short,
                         "Short Target": target_short,
                         "Long SL": sl_long,
@@ -328,7 +378,7 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME IPO HUB (ACCURATE MULTI-SOURCE PARSING) ---
+# --- 6. REAL-TIME IPO HUB (ACCURATE PARSING & RECOVERY) ---
 @st.cache_data(ttl=600)
 def fetch_live_ipo_gmp():
     """Fetches IPOs using resilient header mapping to ensure precise dates and comprehensive coverage."""
@@ -413,7 +463,7 @@ def fetch_live_ipo_gmp():
 
                         if gmp_pct >= 30.0:
                             recom = "STRONG APPLY"
-                            rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% est. gain). High institutional and retail interest."
+                            rationale = f"Strong Grey Market Premium ({gmp_pct:.1f}% est. gain). High institutional appetite."
                         elif 15.0 <= gmp_pct < 30.0:
                             recom = "APPLY (Listing Gain)"
                             rationale = f"Healthy listing cushion ({gmp_pct:.1f}% GMP). Favorable for short-term listing gains."
@@ -441,7 +491,7 @@ def fetch_live_ipo_gmp():
     except Exception:
         pass
 
-    # Source 2: Chittorgarh IPO aggregator fallback if list is short
+    # Source 2: Chittorgarh IPO Aggregator fallback
     if len(ipo_records) < 5:
         try:
             c_url = "https://www.chittorgarh.com/report/ipo-in-india-list-main-board-sme/82/"
@@ -478,12 +528,12 @@ def fetch_live_ipo_gmp():
                                     "Open Date": c_open if c_open else "Upcoming",
                                     "Close Date": c_close if c_close else "Upcoming",
                                     "Recommendation": "NEUTRAL / CAUTION",
-                                    "Analysis & Rationale": "Upcoming issue. Grey market quote will update closer to subscription open."
+                                    "Analysis & Rationale": "Upcoming issue. Grey market quote updates closer to subscription window."
                                 })
         except Exception:
             pass
 
-    # Source 3: Verified default schedule if sources are unreachable
+    # Source 3: Verified baseline schedule if sources are unreachable
     if not ipo_records:
         ipo_records = [
             {
@@ -749,7 +799,6 @@ def stream_chatbot_response(user_query: str):
     api_key = get_gemini_api_key()
     context = get_live_market_context_for_query(user_query)
 
-    # Format dialogue turns for context tracking
     recent_history = ""
     if "chat_history" in st.session_state and len(st.session_state.chat_history) > 1:
         for turn in st.session_state.chat_history[-4:]:
@@ -849,9 +898,9 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         if not low_52w.empty:
             v_row = low_52w.iloc[0]
             resp += (
-                f"**3. Value Compounder (Long-Term 6–18 Months):**\n"
+                f"**3. Value + Technical Reversal (Long-Term 6–18 Months):**\n"
                 f"- **Stock:** `{v_row['Stock']}` (Base at ₹{v_row['Price']:,.2f})\n"
-                f"- **Setup:** Healthy balance sheet near 52-week support (only {v_row['Dist %']}% from bottom).\n"
+                f"- **Setup:** Healthy balance sheet near 52-week support with bullish technical indicators ({v_row['Technical Setup']}).\n"
                 f"- **Action:** Accumulate for long term | **Target:** ₹{v_row['Long Target']:,.2f} | **Stop-Loss:** ₹{v_row['Long SL']:,.2f}\n\n"
             )
 
@@ -948,7 +997,7 @@ st.markdown(f"""
 active_tab = st.session_state.current_tab
 
 # ==============================================================================
-# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOWS
+# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOW (WITH TECHNICAL BUY GATE)
 # ==============================================================================
 if active_tab == "📊 Market Watch":
     is_market_open, now_ist = get_market_status()
@@ -1028,8 +1077,8 @@ if active_tab == "📊 Market Watch":
                 st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.subheader("🛡️ Top 3 Fundamental Stocks Near 52-Week Low")
-        st.caption("Zero/low debt, solid balance sheet, and closest to 52-week support with calculated Stop-Loss & Target levels.")
+        st.subheader("🛡️ Top 3 Value Picks (52W Low Support + Bullish Technical Confirmation)")
+        st.caption("Candidates must have a solid balance sheet near 52-week support AND technical indicators (RSI + 20 EMA / MACD) explicitly in favor of a BUY.")
 
         low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
         if not low_screener_df.empty:
@@ -1040,6 +1089,8 @@ if active_tab == "📊 Market Watch":
                         st.markdown(f"### 💎 {row['Stock']}")
                         st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% from 52W Low", delta_color="inverse")
                         st.write(f"**52W Low:** ₹{row['52W Low']} | **52W High:** ₹{row['52W High']}")
+                        st.success(f"**{row['Technical Verdict']}**")
+                        st.caption(f"⚡ **Setup:** {row['Technical Setup']}")
                         st.markdown("---")
                         st.markdown("**⚡ Short-Term (1–4 Wks):**")
                         st.write(f"- **Buy Range:** ₹{row['Price']}")
@@ -1049,7 +1100,7 @@ if active_tab == "📊 Market Watch":
                         st.write(f"- **Stop-Loss:** ₹{row['Long SL']}")
                         st.write(f"- **Target:** ₹{row['Long Target']}")
         else:
-            st.info("Loading 52-week value candidates...")
+            st.info("No candidates currently fulfill both the 52-week support threshold AND the bullish technical buy criteria.")
 
     render_movers_dashboard()
 
