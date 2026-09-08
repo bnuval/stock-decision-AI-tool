@@ -200,7 +200,7 @@ def get_all_nse_symbols():
         "TITAN", "BAJFINANCE", "TATAMOTORS", "TATASTEEL", "NTPC", "POWERGRID", "M&M",
         "ADANIENT", "ADANIPORTS", "COALINDIA", "BAJAJFINSV", "WIPRO", "ULTRACEMCO", "ONGC",
         "HCLTECH", "TECHM", "DIVISLAB", "VEDL", "ZOMATO", "PAYTM", "JIOFIN", "HAL",
-        "BEL", "BHEL", "IRCTC", "RVNL", "IREDA", "SUZLON", "YESBANK", "IDEA", "DLF", "DABUR", "KEI"
+        "BEL", "BHEL", "IRCTC", "RVNL", "IREDA", "SUZLON", "YESBANK", "IDEA", "DLF", "DABUR", "KEI", "COMMITTED"
     ]
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
@@ -280,10 +280,6 @@ def get_live_market_data(universe):
 # --- 5. TOP 3 PICKS: 52-WEEK LOW + STRICT TECHNICAL BUY SIGNAL ---
 @st.cache_data(ttl=300)
 def screen_52w_low_strong_picks(universe):
-    """
-    Screens fundamentally strong candidates close to 52-week low THAT ALSO
-    have Technical Analysis in favor of a BUY (Confluence of RSI + EMA + MACD).
-    """
     candidate_symbols = [
         "HINDUNILVR", "DABUR", "ITC", "IRCTC", "INFY", "TCS", "HDFCBANK",
         "KOTAKBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO", "TATAMOTORS",
@@ -312,27 +308,19 @@ def screen_52w_low_strong_picks(universe):
 
                 dist_from_low = ((curr_price - low_52w) / low_52w) * 100
 
-                # Must be within 18% of its 52-week low to qualify for value support
                 if dist_from_low > 18.0:
                     continue
 
-                # --- TECHNICAL ANALYSIS FILTER ---
-                # 1. 14-day RSI
                 rsi_series = ta.momentum.RSIIndicator(series, window=14).rsi()
                 rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
 
-                # 2. 20-day EMA (short-term momentum trend)
                 ema_20_series = ta.trend.EMAIndicator(series, window=20).ema_indicator()
                 ema_20 = float(ema_20_series.iloc[-1]) if not ema_20_series.empty else curr_price
 
-                # 3. MACD
                 macd_obj = ta.trend.MACD(series)
                 macd_line = float(macd_obj.macd().iloc[-1])
                 macd_sig = float(macd_obj.macd_signal().iloc[-1])
 
-                # Technical Confirmation Rules:
-                # - RSI should not be overbought (> 65) and not in a freefall spiral (< 28)
-                # - Price must hold near or cross above 20 EMA, OR MACD line above signal
                 rsi_ok = (30.0 <= rsi_val <= 65.0)
                 momentum_ok = (curr_price >= ema_20 * 0.985) or (macd_line >= macd_sig)
 
@@ -349,7 +337,6 @@ def screen_52w_low_strong_picks(universe):
                     tech_score += 1
                     tech_notes.append("MACD holds bullish crossover")
 
-                # Strictly require technical indicators to be IN FAVOR (tech_score >= 2)
                 if tech_score >= 2 and momentum_ok:
                     sl_short = round(low_52w * 0.98, 2)
                     target_short = round(curr_price * 1.08, 2)
@@ -378,10 +365,9 @@ def screen_52w_low_strong_picks(universe):
         pass
     return pd.DataFrame()
 
-# --- 6. REAL-TIME IPO HUB (ACCURATE PARSING & RECOVERY) ---
+# --- 6. REAL-TIME IPO HUB ---
 @st.cache_data(ttl=600)
 def fetch_live_ipo_gmp():
-    """Fetches IPOs using resilient header mapping to ensure precise dates and comprehensive coverage."""
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://www.google.com/"
@@ -390,7 +376,6 @@ def fetch_live_ipo_gmp():
     ipo_records = []
     seen_companies = set()
 
-    # Source 1: InvestorGain Live Report with dynamic column-header mapping
     try:
         url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
         resp = requests.get(url, headers=headers, timeout=10)
@@ -491,7 +476,6 @@ def fetch_live_ipo_gmp():
     except Exception:
         pass
 
-    # Source 2: Chittorgarh IPO Aggregator fallback
     if len(ipo_records) < 5:
         try:
             c_url = "https://www.chittorgarh.com/report/ipo-in-india-list-main-board-sme/82/"
@@ -533,7 +517,6 @@ def fetch_live_ipo_gmp():
         except Exception:
             pass
 
-    # Source 3: Verified baseline schedule if sources are unreachable
     if not ipo_records:
         ipo_records = [
             {
@@ -553,24 +536,6 @@ def fetch_live_ipo_gmp():
                 "GMP (₹)": 45.0, "Est Gain %": 7.1, "Lot Size": "23", "Subscription": "-", "Open Date": "08 Sep 2026",
                 "Close Date": "10 Sep 2026", "Recommendation": "NEUTRAL / CAUTION",
                 "Analysis & Rationale": "7% GMP cushion; sensitive to broader market swings on listing day."
-            },
-            {
-                "Company": "Glass Wall Systems (India)", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 410.0,
-                "GMP (₹)": 62.0, "Est Gain %": 15.1, "Lot Size": "36", "Subscription": "-", "Open Date": "08 Sep 2026",
-                "Close Date": "10 Sep 2026", "Recommendation": "APPLY (Listing Gain)",
-                "Analysis & Rationale": "15%+ listing cushion with strong order book visibility."
-            },
-            {
-                "Company": "Karamtara Engineering", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 285.0,
-                "GMP (₹)": 48.0, "Est Gain %": 16.8, "Lot Size": "52", "Subscription": "-", "Open Date": "09 Sep 2026",
-                "Close Date": "11 Sep 2026", "Recommendation": "APPLY (Listing Gain)",
-                "Analysis & Rationale": "Transmission & infrastructure player with double-digit grey market demand."
-            },
-            {
-                "Company": "Apana Logistics", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 60.0,
-                "GMP (₹)": 1.0, "Est Gain %": 1.6, "Lot Size": "2,000", "Subscription": "0.9x", "Open Date": "07 Sep 2026",
-                "Close Date": "09 Sep 2026", "Recommendation": "AVOID",
-                "Analysis & Rationale": "Extremely weak 1.6% GMP and low subscription interest. High risk of flat or discounted listing."
             }
         ]
 
@@ -627,14 +592,12 @@ def get_live_market_context_for_query(query: str):
     ticker_found = None
     company_name = None
 
-    # Step 1: Detect explicit NSE stock symbol in query
     for t in tokens:
         if t in ALL_NSE_STOCKS:
             ticker_found = f"{t}.NS"
             company_name = t
             break
 
-    # Step 2: Detect company name online (e.g. "Reliance", "Tata Motors", "KEI Wires")
     if not ticker_found:
         clean_target = re.sub(
             r"(?i)\b(what|is|the|current|last|year|quarter|annual|net|profit|revenue|margin|analiyse|analyse|analyze|analysis|check|review|details|will|price|share|stock|of|hike|increase|decrease|fall|go|up|down|in|next|few|days|weeks|months|short|long|term|safe|to|buy|sell|hold|invest|for|now|today|should|i|tell|me|about|how|it|this|that|same|stock|company)\b",
@@ -647,7 +610,6 @@ def get_live_market_context_for_query(query: str):
         if search_term and len(search_term) >= 3:
             ticker_found, company_name = resolve_ticker_online(search_term)
 
-    # Step 3: Contextual Memory Fallback (Pronouns or short follow-ups like "is it safe to buy now?")
     if not ticker_found and st.session_state.active_stock.get("symbol"):
         padded_query = f" {normalized} "
         pronoun_cues = [" IT ", " THIS ", " THAT ", " ITS ", " SAME ", " THE STOCK ", " THE SHARE ", " THE COMPANY ", " HOLD IT "]
@@ -659,7 +621,6 @@ def get_live_market_context_for_query(query: str):
             ticker_found = st.session_state.active_stock["symbol"]
             company_name = st.session_state.active_stock["company"]
 
-    # Step 4: Persist active stock memory
     if ticker_found and company_name:
         st.session_state.active_stock = {"symbol": ticker_found, "company": company_name}
 
@@ -684,6 +645,15 @@ def get_live_market_context_for_query(query: str):
             stock = yf.Ticker(ticker_found)
             info = stock.info or {}
             hist = stock.history(period="3mo")
+
+            if hist.empty:
+                sme_sym = ticker_found.replace(".NS", "-SM.NS")
+                sme_stock = yf.Ticker(sme_sym)
+                sme_hist = sme_stock.history(period="3mo")
+                if not sme_hist.empty:
+                    stock = sme_stock
+                    hist = sme_hist
+                    info = stock.info or {}
 
             if not hist.empty:
                 context_dict["price"] = float(hist["Close"].iloc[-1])
@@ -738,7 +708,6 @@ def get_live_market_context_for_query(query: str):
 
 # --- 10. BULLETPROOF FLASH CALLER ---
 def call_gemini_rest_api(prompt: str, api_key: str):
-    """Direct HTTP POST to Google AI Studio with active Gemini Flash endpoints."""
     target_models = [
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
@@ -774,7 +743,6 @@ def call_gemini_rest_api(prompt: str, api_key: str):
         except Exception as e:
             last_error = f"{model_name} -> {str(e)}"
 
-    # Dynamic Discovery Fallback
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
         list_resp = requests.get(list_url, headers=headers, timeout=8)
@@ -805,7 +773,6 @@ def stream_chatbot_response(user_query: str):
             role = "User" if turn["role"] == "user" else "Assistant"
             recent_history += f"{role}: {turn['content']}\n"
 
-    # 1. Attempt AI Generation
     if api_key:
         prompt = f"""
         You are an Indian Equity Market & Financial Intelligence Analyst for the NSE/BSE.
@@ -832,7 +799,6 @@ def stream_chatbot_response(user_query: str):
         else:
             yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
 
-    # 2. Heuristic Rule Engine Fallback
     static_reply = process_universal_chatbot_static(user_query, context)
     for word in static_reply.split(" "):
         yield word + " "
@@ -843,7 +809,6 @@ def process_universal_chatbot_static(user_query: str, context: dict):
     comp = context.get("company")
     ticker = context.get("ticker")
 
-    # Intent 1: Profit / Revenue / Financial Results
     if any(w in upper for w in ["PROFIT", "REVENUE", "INCOME", "EARNING", "FINANCIAL", "RESULTS", "EBITDA", "MARGIN"]):
         if comp:
             net_profit_str = f"₹{context['net_income_cr']:,.2f} Crores" if context.get("net_income_cr") else "See latest annual report filings"
@@ -862,7 +827,6 @@ def process_universal_chatbot_static(user_query: str, context: dict):
                 f"> **Context:** Corporate earnings reflect consolidated full-year performance. For quarterly breakdowns, track quarterly filing announcements on NSE/BSE."
             )
 
-    # Intent 2: Broad Stock Recommendations
     if any(k in upper for k in [
         "WHICH SHARE IS BEST TO BUY", "WHICH STOCK IS BEST TO BUY", "WHAT TO BUY NOW",
         "WHICH SHARE TO BUY TODAY", "BEST SHARE TO BUY NOW", "BEST STOCK TO BUY",
@@ -908,7 +872,6 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
-    # Intent 3: Price Direction / Targets
     if comp and any(w in upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
         curr_price = context.get("price") or 0.0
         rsi = context.get("rsi") or 50.0
@@ -929,7 +892,6 @@ def process_universal_chatbot_static(user_query: str, context: dict):
             )
         )
 
-    # Intent 4: Long-Term Safety / Fundamentals
     if comp and any(w in upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
         roe = context.get("roe") or 0.0
         pe = context.get("pe")
@@ -949,7 +911,6 @@ def process_universal_chatbot_static(user_query: str, context: dict):
             )
         )
 
-    # Fallback Overview
     if comp:
         return (
             f"### Snapshot for **{comp}** (`{ticker}`)\n\n"
@@ -971,7 +932,7 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         "- *'Will Tata Motors price hike in the next few days?'*"
     )
 
-# --- COMBINED PINNED MASTER BAR (HEADER + PERSISTENT TABS) ---
+# --- COMBINED PINNED MASTER BAR ---
 tabs_list = [
     ("📊 Market Watch", "watch"),
     ("💬 Stock Chatbot", "chat"),
@@ -997,7 +958,7 @@ st.markdown(f"""
 active_tab = st.session_state.current_tab
 
 # ==============================================================================
-# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOW (WITH TECHNICAL BUY GATE)
+# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOW
 # ==============================================================================
 if active_tab == "📊 Market Watch":
     is_market_open, now_ist = get_market_status()
@@ -1120,12 +1081,10 @@ elif active_tab == "💬 Stock Chatbot":
             {"role": "assistant", "content": "Hello! I am your real-time Indian Equities Assistant. You can ask consecutive questions in the same context, for example:\n1. *'What is current year profit of KEI Wires?'*\n2. *'Is it safe to buy it now?'*\n\nOr ask about a new stock whenever you like!"}
         ]
 
-    # Render previous conversation history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # Disable chat input while response generation is underway
     chat_placeholder = "Processing answer, please wait..." if st.session_state.is_generating else "Ask any share market question..."
     user_prompt = st.chat_input(
         chat_placeholder,
@@ -1133,12 +1092,10 @@ elif active_tab == "💬 Stock Chatbot":
     )
 
     if user_prompt and not st.session_state.is_generating:
-        # 1. Append user query and display
         st.session_state.chat_history.append({"role": "user", "content": user_prompt})
         with st.chat_message("user"):
             st.markdown(user_prompt)
 
-        # 2. Lock input and display processing status
         st.session_state.is_generating = True
 
         with st.chat_message("assistant"):
@@ -1151,12 +1108,11 @@ elif active_tab == "💬 Stock Chatbot":
 
             st.session_state.chat_history.append({"role": "assistant", "content": full_response})
 
-        # 3. Unlock input and refresh state
         st.session_state.is_generating = False
         st.rerun()
 
 # ==============================================================================
-# TAB 3: LIVE IPOs & GMP TRACKER (CORRECT DATES + COMPREHENSIVE LIST)
+# TAB 3: LIVE IPOs & GMP TRACKER
 # ==============================================================================
 elif active_tab == "🚀 IPO Hub":
     h_col1, h_col2 = st.columns([3, 1])
@@ -1221,7 +1177,7 @@ elif active_tab == "🚀 IPO Hub":
         st.info("Gathering live IPO grey market figures...")
 
 # ==============================================================================
-# TAB 4: DEEP-DIVE SINGLE STOCK ANALYZER
+# TAB 4: DEEP-DIVE SINGLE STOCK ANALYZER (SME & CANDLE PRIORITIZED)
 # ==============================================================================
 elif active_tab == "🔍 Deep Dive":
     st.subheader("🔍 Single Stock Deep Dive & Buy/Sell Call")
@@ -1232,7 +1188,7 @@ elif active_tab == "🔍 Deep Dive":
             "Type or select stock symbol:",
             options=ALL_NSE_STOCKS,
             index=None,
-            placeholder="Type symbol (e.g. RELIANCE, TCS, INFY, TATAMOTORS, KEI)...",
+            placeholder="Type symbol (e.g. RELIANCE, COMMITTED, TCS, INFY, KEI)...",
             accept_new_options=True
         )
     with c_exch:
@@ -1244,138 +1200,159 @@ elif active_tab == "🔍 Deep Dive":
         if not selected_stock:
             st.warning("Please select or enter a stock ticker first.")
         else:
-            ticker_symbol = selected_stock.strip().upper() + suffix
+            raw_input = selected_stock.strip().upper()
+            clean_ticker = re.sub(r"\.(NSE|NS|BSE|BO)$", "", raw_input).strip()
+            
+            # Primary candidate ticker
+            ticker_symbol = f"{clean_ticker}{suffix}"
+            
             with st.spinner(f"Evaluating {ticker_symbol}..."):
                 try:
                     stock = yf.Ticker(ticker_symbol)
                     hist = stock.history(period="1y")
 
-                    fast = getattr(stock, "fast_info", None)
-                    if fast and hasattr(fast, "last_price") and fast.last_price:
-                        live_price = float(fast.last_price)
-                        prev_close = float(fast.previous_close or hist["Close"].iloc[-2])
-                    else:
-                        live_price = float(hist["Close"].iloc[-1])
-                        prev_close = float(hist["Close"].iloc[-2])
+                    # SME Fallback: If primary symbol has no candles, check SME series (-SM.NS)
+                    if hist.empty or len(hist) < 5:
+                        sme_symbol = f"{clean_ticker}-SM.NS"
+                        sme_stock = yf.Ticker(sme_symbol)
+                        sme_hist = sme_stock.history(period="1y")
+                        if not sme_hist.empty and len(sme_hist) >= 5:
+                            ticker_symbol = sme_symbol
+                            stock = sme_stock
+                            hist = sme_hist
+
+                    # Online Fallback: If still empty, resolve via Yahoo Finance API
+                    if hist.empty or len(hist) < 5:
+                        resolved_sym, _ = resolve_ticker_online(clean_ticker)
+                        if resolved_sym:
+                            ticker_symbol = resolved_sym
+                            stock = yf.Ticker(ticker_symbol)
+                            hist = stock.history(period="1y")
+
+                    if hist.empty or len(hist) < 5:
+                        st.error(f"Could not retrieve trading data for '{clean_ticker}'. Please verify the stock symbol.")
+                        st.stop()
+
+                    # Prioritize actual traded candles over fast_info to avoid nominal/book values (like 53.10)
+                    live_price = float(hist["Close"].iloc[-1])
+                    prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else live_price
 
                     day_change = live_price - prev_close
                     day_pct = (day_change / prev_close) * 100
                     info = stock.info or {}
 
-                    if hist.empty or len(hist) < 30:
-                        st.error("Insufficient market history to generate indicators.")
+                    hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
+                    hist["SMA_50"] = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator()
+                    hist["SMA_200"] = ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator()
+                    macd = ta.trend.MACD(hist["Close"])
+                    hist["MACD"] = macd.macd()
+                    hist["MACD_Signal"] = macd.macd_signal()
+
+                    latest = hist.iloc[-1]
+                    rsi = float(latest["RSI"]) if pd.notna(latest["RSI"]) else 50.0
+                    sma_50 = float(latest["SMA_50"]) if pd.notna(latest["SMA_50"]) else live_price
+                    sma_200 = float(latest["SMA_200"]) if pd.notna(latest["SMA_200"]) else live_price
+
+                    sentiment_score, news_items = fetch_cloud_safe_news(stock, clean_ticker)
+
+                    st_score = 0
+                    st_reasons = []
+
+                    if rsi < 35:
+                        st_score += 1
+                        st_reasons.append(f"RSI is oversold ({rsi:.1f}), signaling technical bounce potential.")
+                    elif rsi > 70:
+                        st_score -= 1
+                        st_reasons.append(f"RSI is overbought ({rsi:.1f}), signaling near-term exhaustion.")
                     else:
-                        hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
-                        hist["SMA_50"] = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator()
-                        hist["SMA_200"] = ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator()
-                        macd = ta.trend.MACD(hist["Close"])
-                        hist["MACD"] = macd.macd()
-                        hist["MACD_Signal"] = macd.macd_signal()
+                        st_reasons.append(f"RSI is neutral ({rsi:.1f}).")
 
-                        latest = hist.iloc[-1]
-                        rsi = float(latest["RSI"])
-                        sma_50 = float(latest["SMA_50"]) if pd.notna(latest["SMA_50"]) else 0
-                        sma_200 = float(latest["SMA_200"]) if pd.notna(latest["SMA_200"]) else 0
+                    if latest["MACD"] > latest["MACD_Signal"]:
+                        st_score += 1
+                        st_reasons.append("Bullish momentum: MACD line holds above signal line.")
+                    else:
+                        st_score -= 1
+                        st_reasons.append("Bearish momentum: MACD line trades below signal line.")
 
-                        sentiment_score, news_items = fetch_cloud_safe_news(stock, selected_stock)
+                    if sma_50 and live_price > sma_50:
+                        st_score += 1
+                        st_reasons.append(f"Price is trading above 50-day SMA (₹{sma_50:.2f}).")
+                    elif sma_50:
+                        st_score -= 1
+                        st_reasons.append(f"Price is trading below 50-day SMA (₹{sma_50:.2f}).")
 
-                        st_score = 0
-                        st_reasons = []
+                    if sentiment_score > 0.05:
+                        st_score += 1
+                        st_reasons.append(f"Live news sentiment is positive (+{sentiment_score:.2f}).")
+                    elif sentiment_score < -0.05:
+                        st_score -= 1
+                        st_reasons.append(f"Live news sentiment is cautious ({sentiment_score:.2f}).")
 
-                        if rsi < 35:
-                            st_score += 1
-                            st_reasons.append(f"RSI is oversold ({rsi:.1f}), signaling technical bounce potential.")
-                        elif rsi > 70:
-                            st_score -= 1
-                            st_reasons.append(f"RSI is overbought ({rsi:.1f}), signaling near-term exhaustion.")
-                        else:
-                            st_reasons.append(f"RSI is neutral ({rsi:.1f}).")
+                    st_call = "BUY" if st_score >= 1 else ("SELL" if st_score <= -1 else "HOLD")
 
-                        if latest["MACD"] > latest["MACD_Signal"]:
-                            st_score += 1
-                            st_reasons.append("Bullish momentum: MACD line holds above signal line.")
-                        else:
-                            st_score -= 1
-                            st_reasons.append("Bearish momentum: MACD line trades below signal line.")
+                    lt_score = 0
+                    lt_reasons = []
 
-                        if sma_50 and live_price > sma_50:
-                            st_score += 1
-                            st_reasons.append(f"Price is trading above 50-day SMA (₹{sma_50:.2f}).")
-                        elif sma_50:
-                            st_score -= 1
-                            st_reasons.append(f"Price is trading below 50-day SMA (₹{sma_50:.2f}).")
+                    roe = info.get("returnOnEquity")
+                    debt_equity = info.get("debtToEquity")
 
-                        if sentiment_score > 0.05:
-                            st_score += 1
-                            st_reasons.append(f"Live news sentiment is positive (+{sentiment_score:.2f}).")
-                        elif sentiment_score < -0.05:
-                            st_score -= 1
-                            st_reasons.append(f"Live news sentiment is cautious ({sentiment_score:.2f}).")
+                    if roe and roe > 0.15:
+                        lt_score += 1
+                        lt_reasons.append(f"Strong ROE profile ({roe*100:.1f}%).")
+                    elif roe and roe < 0.08:
+                        lt_score -= 1
+                        lt_reasons.append(f"Subdued capital efficiency: ROE ({roe*100:.1f}%).")
 
-                        st_call = "BUY" if st_score >= 1 else ("SELL" if st_score <= -1 else "HOLD")
-
-                        lt_score = 0
-                        lt_reasons = []
-
-                        roe = info.get("returnOnEquity")
-                        debt_equity = info.get("debtToEquity")
-
-                        if roe and roe > 0.15:
+                    if debt_equity is not None:
+                        if debt_equity < 100:
                             lt_score += 1
-                            lt_reasons.append(f"Strong ROE profile ({roe*100:.1f}%).")
-                        elif roe and roe < 0.08:
-                            lt_score -= 1
-                            lt_reasons.append(f"Subdued capital efficiency: ROE ({roe*100:.1f}%).")
-
-                        if debt_equity is not None:
-                            if debt_equity < 100:
-                                lt_score += 1
-                                lt_reasons.append("Conservative leverage: Debt-to-Equity is low (< 1.0).")
-                            else:
-                                lt_score -= 1
-                                lt_reasons.append("Elevated debt leverage on balance sheet.")
-
-                        if sma_200:
-                            if live_price > sma_200:
-                                lt_score += 1
-                                lt_reasons.append(f"Structural uptrend: Price holds above 200-day SMA (₹{sma_200:.2f}).")
-                            else:
-                                lt_score -= 1
-                                lt_reasons.append(f"Macro downtrend: Price trades below 200-day SMA (₹{sma_200:.2f}).")
-
-                        lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
-
-                        st.markdown("---")
-                        st.subheader(info.get("longName", ticker_symbol))
-                        st.metric(
-                            label="Live Traded Price (LTP)",
-                            value=f"₹{live_price:,.2f}",
-                            delta=f"{day_change:+,.2f} ({day_pct:+.2f}%)"
-                        )
-
-                        r1, r2 = st.columns(2)
-                        with r1:
-                            st.markdown("#### ⚡ Short-Term Call")
-                            if st_call == "BUY": st.success("### ACTION: BUY")
-                            elif st_call == "SELL": st.error("### ACTION: SELL")
-                            else: st.warning("### ACTION: HOLD")
-                            for r in st_reasons: st.write(f"- {r}")
-
-                        with r2:
-                            st.markdown("#### 🏛️ Long-Term Call")
-                            if lt_call == "BUY": st.success("### ACTION: BUY")
-                            elif lt_call == "SELL": st.error("### ACTION: SELL")
-                            else: st.warning("### ACTION: HOLD")
-                            for r in lt_reasons: st.write(f"- {r}")
-
-                        st.markdown("---")
-                        st.markdown("#### 📰 Scanned Headlines")
-                        if news_items:
-                            for n in news_items:
-                                badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
-                                st.markdown(f"**[{badge}]** [{n['title']}]({n['link']})")
+                            lt_reasons.append("Conservative leverage: Debt-to-Equity is low (< 1.0).")
                         else:
-                            st.info("No recent news headlines available for this symbol.")
+                            lt_score -= 1
+                            lt_reasons.append("Elevated debt leverage on balance sheet.")
+
+                    if sma_200:
+                        if live_price > sma_200:
+                            lt_score += 1
+                            lt_reasons.append(f"Structural uptrend: Price holds above 200-day SMA (₹{sma_200:.2f}).")
+                        else:
+                            lt_score -= 1
+                            lt_reasons.append(f"Macro downtrend: Price trades below 200-day SMA (₹{sma_200:.2f}).")
+
+                    lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
+
+                    st.markdown("---")
+                    display_name = info.get("longName") or info.get("shortName") or ticker_symbol
+                    st.subheader(f"{display_name} (`{ticker_symbol}`)")
+                    st.metric(
+                        label="Live Traded Price (LTP)",
+                        value=f"₹{live_price:,.2f}",
+                        delta=f"{day_change:+,.2f} ({day_pct:+.2f}%)"
+                    )
+
+                    r1, r2 = st.columns(2)
+                    with r1:
+                        st.markdown("#### ⚡ Short-Term Call")
+                        if st_call == "BUY": st.success("### ACTION: BUY")
+                        elif st_call == "SELL": st.error("### ACTION: SELL")
+                        else: st.warning("### ACTION: HOLD")
+                        for r in st_reasons: st.write(f"- {r}")
+
+                    with r2:
+                        st.markdown("#### 🏛️ Long-Term Call")
+                        if lt_call == "BUY": st.success("### ACTION: BUY")
+                        elif lt_call == "SELL": st.error("### ACTION: SELL")
+                        else: st.warning("### ACTION: HOLD")
+                        for r in lt_reasons: st.write(f"- {r}")
+
+                    st.markdown("---")
+                    st.markdown("#### 📰 Scanned Headlines")
+                    if news_items:
+                        for n in news_items:
+                            badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
+                            st.markdown(f"**[{badge}]** [{n['title']}]({n['link']})")
+                    else:
+                        st.info("No recent news headlines available for this symbol.")
 
                 except Exception as e:
                     st.error(f"Error analyzing ticker: {e}")
