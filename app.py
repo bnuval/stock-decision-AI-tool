@@ -167,17 +167,51 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. MARKET SCHEDULE ENGINE ---
+# --- 1. MARKET SCHEDULE & NSE/BSE TRADING HOLIDAYS ENGINE ---
+NSE_TRADING_HOLIDAYS = {
+    # 2026 Official NSE/BSE Equity Trading Calendar
+    date(2026, 1, 26): "Republic Day",
+    date(2026, 3, 3): "Holi",
+    date(2026, 3, 20): "Id-Ul-Fitr (Ramzan Id)",
+    date(2026, 3, 27): "Ram Navami",
+    date(2026, 4, 3): "Good Friday",
+    date(2026, 4, 14): "Dr. Baba Saheb Ambedkar Jayanti",
+    date(2026, 5, 1): "Maharashtra Day",
+    date(2026, 5, 27): "Bakri Id",
+    date(2026, 6, 26): "Muharram",
+    date(2026, 9, 14): "Ganesh Chaturthi",
+    date(2026, 10, 2): "Mahatma Gandhi Jayanti",
+    date(2026, 10, 20): "Dussehra",
+    date(2026, 11, 10): "Diwali-Balipratipada",
+    date(2026, 11, 24): "Prakash Gurpurb Sri Guru Nanak Dev Jayanti",
+    date(2026, 12, 25): "Christmas",
+}
+
 def get_market_status():
+    """
+    Evaluates current time against market trading hours, weekends,
+    and verified exchange public holidays.
+    """
     now_ist = datetime.now(IST)
+    today_date = now_ist.date()
     weekday = now_ist.weekday()
     current_time = now_ist.time()
 
-    is_open = False
-    if weekday < 5:
-        if time(9, 15) <= current_time <= time(15, 30):
-            is_open = True
-    return is_open, now_ist
+    # Check 1: Weekends (Saturday=5, Sunday=6)
+    if weekday >= 5:
+        return False, now_ist, "Weekend (Saturday/Sunday)"
+
+    # Check 2: NSE Public & Exchange Trading Holidays
+    if today_date in NSE_TRADING_HOLIDAYS:
+        return False, now_ist, f"Public Holiday ({NSE_TRADING_HOLIDAYS[today_date]})"
+
+    # Check 3: Regular Trading Session (09:15 to 15:30 IST)
+    if time(9, 15) <= current_time <= time(15, 30):
+        return True, now_ist, "Regular Session Open"
+    elif current_time < time(9, 15):
+        return False, now_ist, "Pre-Market (Opens at 9:15 AM)"
+    else:
+        return False, now_ist, "Market Closed (Post 3:30 PM)"
 
 # --- 2. NSE MASTER DIRECTORY ---
 @st.cache_data(ttl=86400)
@@ -503,63 +537,7 @@ def fetch_live_ipo_gmp():
         pass
 
     master_live_calendar = [
-        # Issues Closing Today
-        {
-            "Company": "Rentomojo (Edunetwork)", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 404.0,
-            "GMP (₹)": 125.0, "Est Gain %": 30.9, "Lot Size": "37", "Subscription": "14.8x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "STRONG APPLY",
-            "Analysis & Rationale": "Closing today. Over 30% listing gain cushion with profitable consumer tech growth profile."
-        },
-        {
-            "Company": "Karamtara Engineering", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 254.0,
-            "GMP (₹)": 58.0, "Est Gain %": 22.8, "Lot Size": "59", "Subscription": "8.4x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "APPLY (Listing Gain)",
-            "Analysis & Rationale": "Closing today. Transmission infrastructure player backed by 22%+ premium demand."
-        },
-        {
-            "Company": "LCC Projects", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 146.0,
-            "GMP (₹)": 25.5, "Est Gain %": 17.5, "Lot Size": "102", "Subscription": "6.1x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "APPLY (Listing Gain)",
-            "Analysis & Rationale": "Closing today. EPC contractor with healthy 17.5% listing buffer."
-        },
-        {
-            "Company": "Manipal Payment & Identity Solutions", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 339.0,
-            "GMP (₹)": 38.0, "Est Gain %": 11.2, "Lot Size": "44", "Subscription": "3.8x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Closing today. FinTech smartcard manufacturer with modest 11% listing cushion."
-        },
-        {
-            "Company": "Asset Reconstruction Co.", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 139.0,
-            "GMP (₹)": 27.0, "Est Gain %": 19.4, "Lot Size": "107", "Subscription": "4.9x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "APPLY (Listing Gain)",
-            "Analysis & Rationale": "Closing today. Stressed assets resolution player commanding ~19% premium."
-        },
-        {
-            "Company": "Steamhouse India", "Status": "Ongoing (Closing Today)", "Type": "Mainboard", "Issue Price (₹)": 81.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "185", "Subscription": "1.1x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Closing today. Nil grey market premium; risk of flat or discounted listing."
-        },
-        {
-            "Company": "Vinod Texworld", "Status": "Ongoing (Closing Today)", "Type": "SME", "Issue Price (₹)": 94.0,
-            "GMP (₹)": 8.0, "Est Gain %": 8.5, "Lot Size": "1,200", "Subscription": "2.1x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Closing today. Thin 8.5% premium on NSE SME board."
-        },
-        {
-            "Company": "Infrax Renewable", "Status": "Ongoing (Closing Today)", "Type": "SME", "Issue Price (₹)": 104.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,200", "Subscription": "0.9x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Closing today. Flat premium with undersubscribed retail book."
-        },
-        {
-            "Company": "Amtech Esters", "Status": "Ongoing (Closing Today)", "Type": "SME", "Issue Price (₹)": 75.0,
-            "GMP (₹)": 7.0, "Est Gain %": 9.3, "Lot Size": "1,600", "Subscription": "1.8x", "Open Date": "09-Sep-2026",
-            "Close Date": "11-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Closing today on BSE SME. 9.3% buffer."
-        },
-
-        # Active Ongoing Issues (Closing Next Week)
+        # Active Ongoing Issues
         {
             "Company": "Veegaland Developers", "Status": "Ongoing (Open)", "Type": "Mainboard", "Issue Price (₹)": 140.0,
             "GMP (₹)": 30.0, "Est Gain %": 21.4, "Lot Size": "107", "Subscription": "1.2x", "Open Date": "10-Sep-2026",
@@ -570,7 +548,7 @@ def fetch_live_ipo_gmp():
             "Company": "Manika Plastech", "Status": "Ongoing (Open)", "Type": "Mainboard", "Issue Price (₹)": 43.0,
             "GMP (₹)": 20.0, "Est Gain %": 46.5, "Lot Size": "348", "Subscription": "2.4x", "Open Date": "11-Sep-2026",
             "Close Date": "16-Sep-2026", "Recommendation": "STRONG APPLY",
-            "Analysis & Rationale": "Opened today. Strong 46%+ Grey Market Premium in technical polymer packaging."
+            "Analysis & Rationale": "Strong 46%+ Grey Market Premium in technical polymer packaging."
         },
         {
             "Company": "Maharaja & Speedex India", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 186.0,
@@ -600,7 +578,7 @@ def fetch_live_ipo_gmp():
             "Company": "Century Business Media", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 74.0,
             "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,600", "Subscription": "-", "Open Date": "11-Sep-2026",
             "Close Date": "16-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Opened today on BSE SME with flat grey market cues."
+            "Analysis & Rationale": "BSE SME offering with flat grey market cues."
         },
         {
             "Company": "Injecto Polymers", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 100.0,
@@ -974,7 +952,7 @@ def process_universal_chatbot_static(user_query: str, context: dict):
 
         gainers, losers, _ = get_live_market_data(ALL_NSE_STOCKS)
         low_52w = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
-        is_open, _ = get_market_status()
+        is_open, _, _ = get_market_status()
 
         resp = "### 🎯 Best Stock Opportunities Right Now (Algorithmic Selection)\n\n"
 
@@ -1007,7 +985,7 @@ def process_universal_chatbot_static(user_query: str, context: dict):
                 f"- **Action:** Accumulate for long term | **Target:** ₹{v_row['Long Target']:,.2f} | **Stop-Loss:** ₹{v_row['Long SL']:,.2f}\n\n"
             )
 
-        timing_note = "Market is open. Confirm setups using intraday VWAP." if is_open else "Market is closed. Levels apply to the next session."
+        timing_note = "Market is open. Confirm setups using intraday VWAP." if is_open else "Market is closed. Levels apply to the next active session."
         resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
         return resp
 
@@ -1097,15 +1075,15 @@ st.markdown(f"""
 active_tab = st.session_state.current_tab
 
 # ==============================================================================
-# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOW
+# TAB 1: LIVE MOVERS, DYNAMIC PICKS & 52-WEEK LOW (HOLIDAY-AWARE)
 # ==============================================================================
 if active_tab == "📊 Market Watch":
-    is_market_open, now_ist = get_market_status()
+    is_market_open, now_ist, session_reason = get_market_status()
     fragment_interval = 20 if is_market_open else None
 
     @st.fragment(run_every=fragment_interval)
     def render_movers_dashboard():
-        is_open, current_time_ist = get_market_status()
+        is_open, current_time_ist, status_msg = get_market_status()
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
         if is_open:
@@ -1114,7 +1092,7 @@ if active_tab == "📊 Market Watch":
         else:
             header_col, btn_col = st.columns([3, 1.2])
             with header_col:
-                st.subheader("🔴 Market Watch (Session Closed)")
+                st.subheader(f"🔴 Market Watch (Closed — {status_msg})")
                 st.caption(f"Regular Hours: 9:15 AM – 3:30 PM IST Mon–Fri | Checked: **{time_str}**")
             with btn_col:
                 if st.button("🔄 Refresh Data", use_container_width=True):
@@ -1124,13 +1102,13 @@ if active_tab == "📊 Market Watch":
         gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
 
         if not is_open and last_date:
-            st.info(f"📅 Data represents the last completed exchange session: **{last_date}**")
+            st.info(f"📅 Showing price data from the last completed exchange session: **{last_date}**")
 
         st.markdown("---")
         if is_open:
             st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
         else:
-            st.subheader("⭐ Top Recommendations for Next Session (Short & Long Term)")
+            st.subheader("⭐ Top Recommendations for Next Active Session (Short & Long Term)")
             st.caption("Intraday momentum calls are hidden because the market session is closed.")
 
         if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
