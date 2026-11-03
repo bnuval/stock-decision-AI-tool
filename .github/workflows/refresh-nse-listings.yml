@@ -1,0 +1,35 @@
+name: Refresh recently listed NSE shares
+
+on:
+  schedule:
+    - cron: "45 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-listings:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install updater dependency
+        run: python -m pip install requests
+      - name: Refresh listing catalog
+        run: python scripts/update_nse_listings.py
+      - name: Commit catalog changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/recent_listings.json
+          if git diff --cached --quiet; then
+            echo "No recent-listing changes to commit."
+            exit 0
+          fi
+          git commit -m "Refresh recently listed NSE shares"
+          git push

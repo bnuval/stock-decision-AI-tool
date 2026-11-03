@@ -30,6 +30,7 @@ from stock_features import (
     parse_ipo_schedule_html,
     sync_virtual_trades,
 )
+from nse_listing_catalog import load_recent_listing_catalog
 
 # --- MOBILE-FIRST PAGE CONFIGURATION ---
 st.set_page_config(
@@ -364,6 +365,15 @@ def get_all_nse_symbols():
     ]
 
 ALL_NSE_STOCKS = get_all_nse_symbols()
+RECENT_LISTINGS_PATH = Path(__file__).resolve().parent / "data" / "recent_listings.json"
+RECENT_NSE_LISTINGS_ERROR = False
+try:
+    RECENT_NSE_LISTINGS = load_recent_listing_catalog(RECENT_LISTINGS_PATH)
+except (OSError, ValueError):
+    RECENT_NSE_LISTINGS = []
+    RECENT_NSE_LISTINGS_ERROR = True
+RECENT_NSE_SYMBOLS = {listing["symbol"] for listing in RECENT_NSE_LISTINGS}
+ALL_DEEP_DIVE_STOCKS = sorted(set(ALL_NSE_STOCKS) | RECENT_NSE_SYMBOLS)
 
 # --- 3. DYNAMIC ONLINE TICKER RESOLVER ---
 def resolve_ticker_online(query_text: str):
@@ -514,7 +524,7 @@ def extract_ticker_history(raw: pd.DataFrame, ticker: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=300)
-def screen_confirmed_buy_picks(universe):
+def screen_confirmed_buy_picks(universe) -> pd.DataFrame | None:
     universe_symbols = set(universe)
     candidate_symbols = [
         "HINDUNILVR", "DABUR", "ITC", "IRCTC", "INFY", "TCS", "HDFCBANK",
@@ -536,7 +546,7 @@ def screen_confirmed_buy_picks(universe):
             group_by="ticker",
         )
         if raw.empty:
-            return pd.DataFrame()
+            return None
 
         results = []
 
@@ -581,8 +591,8 @@ def screen_confirmed_buy_picks(universe):
         if results:
             df = pd.DataFrame(results).sort_values(by="RSI", ascending=True)
             return df.head(3).reset_index(drop=True)
-    except Exception as exc:
-        st.warning(f"Could not complete the confirmed-signal scan: {exc}")
+    except Exception:
+        return None
     return pd.DataFrame()
 
 # --- DATE PARSER FOR ROLLING EXPIRATION ---
@@ -660,9 +670,12 @@ def fetch_live_ipo_gmp():
         )
         gmp_response.raise_for_status()
         gmp_records = parse_ipo_gmp_html(gmp_response.content)
-    except (requests.RequestException, ValueError) as exc:
+    except (requests.RequestException, ValueError):
         gmp_records = []
-        gmp_error = f"Live GMP could not be verified: {exc}"
+        gmp_error = (
+            "The latest GMP update is temporarily unavailable. "
+            "Recommendations may change when it returns."
+        )
 
     page_fetched_at = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
     for ipo in ipo_records:
@@ -682,7 +695,7 @@ def fetch_live_ipo_gmp():
         fundamentals = detail["fundamentals"]
         if detail["error"]:
             ipo["Fundamental Source Status"] = (
-                f"Issuer financials unavailable: {detail['error']}"
+                "Issuer financial details are temporarily unavailable."
             )
         else:
             ipo["Fundamental Source Status"] = (
@@ -771,9 +784,9 @@ def get_gemini_api_key():
 def get_fundamental_snapshot(ticker: str) -> dict:
     try:
         info = yf.Ticker(ticker).info or {}
-    except Exception as exc:
+    except Exception:
         result = assess_fundamentals({})
-        result["summary"] = f"Fundamental data unavailable ({type(exc).__name__})."
+        result["summary"] = "Company financial information is temporarily unavailable."
         return result
     return assess_fundamentals(info)
 
@@ -853,7 +866,10 @@ def register_buy_calls(calls: list[dict]) -> None:
     master_key = get_private_setting("JSONBIN_MASTER_KEY")
     if not bin_id or not master_key:
         if not st.session_state.get("jsonbin_config_notice_shown", False):
-            st.info("Paper-trade logging is not configured. Set JSONBIN_BIN_ID and JSONBIN_MASTER_KEY to save BUY calls.")
+            st.info(
+                "Shared paper-trade tracking isn't set up yet, so new BUY calls "
+                "won't appear in the portfolio."
+            )
             st.session_state.jsonbin_config_notice_shown = True
         return
 
@@ -874,8 +890,10 @@ def register_buy_calls(calls: list[dict]) -> None:
             master_key,
             called_at=called_at,
         )
-    except (requests.RequestException, ValueError) as exc:
-        st.error(f"Could not save the paper trade to JSONBin: {exc}")
+    except (requests.RequestException, ValueError):
+        st.error(
+            "We couldn't save this BUY call to the portfolio. Please try again later."
+        )
         return
 
     logged_ids.update(
@@ -1175,7 +1193,10 @@ def stream_chatbot_response(user_query: str):
                 time_module.sleep(0.01)
             return
         else:
-            yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
+            yield (
+                "The AI assistant is temporarily unavailable, so we're using "
+                "the built-in stock analysis instead.\n\n"
+            )
 
     static_reply = process_universal_chatbot_static(user_query, context)
     static_reply = record_chatbot_buy_if_eligible(static_reply, context, user_query)
@@ -1306,6 +1327,12 @@ def process_universal_chatbot_static(user_query: str, context: dict):
 
         confirmed_picks = screen_confirmed_buy_picks(ALL_NSE_STOCKS)
         is_open, _, _ = get_market_status()
+
+        if confirmed_picks is None:
+            return (
+                "The market scan is temporarily unavailable. "
+                "Please try asking again shortly."
+            )
 
         resp = "### 🎯 Stocks passing the confirmed swing screen\n\n"
         buy_calls = []
@@ -1511,6 +1538,10 @@ if active_tab == "📊 Market Watch":
             st.markdown("##### 🔴 Top Losers")
             if not losers_df.empty:
                 st.dataframe(losers_df.style.format({"Latest Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
+        if gainers_df.empty and losers_df.empty:
+            st.info(
+                "Market movement data is temporarily unavailable. Please refresh shortly."
+            )
 
         st.markdown("---")
         st.subheader("🛡️ Confirmed swing BUY setups")
@@ -1522,7 +1553,11 @@ if active_tab == "📊 Market Watch":
         )
 
         low_screener_df = screen_confirmed_buy_picks(ALL_NSE_STOCKS)
-        if not low_screener_df.empty:
+        if low_screener_df is None:
+            st.info(
+                "We couldn't check for BUY setups just now. Please refresh shortly."
+            )
+        elif not low_screener_df.empty:
             cols = st.columns(len(low_screener_df))
             value_buy_calls = []
             for i, (_, row) in enumerate(low_screener_df.iterrows()):
@@ -1642,11 +1677,15 @@ elif active_tab == "🚀 IPO Hub":
 
         try:
             ipo_df, ipo_message = fetch_live_ipo_gmp()
-        except requests.RequestException as exc:
-            st.error(f"Could not load live IPO data: {exc}")
+        except requests.RequestException:
+            st.error(
+                "Live IPO details are temporarily unavailable. Please try again shortly."
+            )
             return
-        except (ValueError, KeyError) as exc:
-            st.error(f"The live IPO feed could not be parsed: {exc}")
+        except (ValueError, KeyError):
+            st.error(
+                "We couldn't read the latest IPO details. Please refresh and try again later."
+            )
             return
 
         if not ipo_df.empty:
@@ -1773,13 +1812,54 @@ elif active_tab == "🚀 IPO Hub":
 elif active_tab == "🔍 Deep Dive":
     st.subheader("🔍 Single Stock Deep Dive & Buy/Sell Call")
 
+    if RECENT_NSE_LISTINGS_ERROR:
+        st.info(
+            "The recently listed share list couldn't be loaded. You can still "
+            "search by typing the share's symbol."
+        )
+    elif RECENT_NSE_LISTINGS:
+        with st.expander("Recently listed on NSE", expanded=False):
+            st.caption(
+                "This list is refreshed nightly. Select a symbol below to view "
+                "its latest available market data and company details."
+            )
+            st.dataframe(
+                pd.DataFrame(RECENT_NSE_LISTINGS)[
+                    ["symbol", "company", "series", "date_of_listing"]
+                ].rename(
+                    columns={
+                        "symbol": "Symbol",
+                        "company": "Company",
+                        "series": "Series",
+                        "date_of_listing": "Listing date",
+                    }
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+    else:
+        st.caption(
+            "Type a ticker to search any NSE or BSE share. The recently listed "
+            "NSE list is refreshed nightly."
+        )
+
+    recent_listing_names = {
+        listing["symbol"]: listing["company"]
+        for listing in RECENT_NSE_LISTINGS
+        if listing["company"]
+    }
     c_search, c_exch = st.columns([3, 1])
     with c_search:
         selected_stock = st.selectbox(
             "Type or select stock symbol:",
-            options=ALL_NSE_STOCKS,
+            options=ALL_DEEP_DIVE_STOCKS,
             index=None,
-            placeholder="Type symbol (e.g. RELIANCE, COMMITTED, TCS, INFY, KEI)...",
+            placeholder="Search any share or type its symbol...",
+            format_func=lambda symbol: (
+                f"{symbol} — {recent_listing_names[symbol]} (NEW)"
+                if symbol in recent_listing_names
+                else symbol
+            ),
             accept_new_options=True
         )
     with c_exch:
@@ -1800,24 +1880,27 @@ elif active_tab == "🔍 Deep Dive":
                     stock = yf.Ticker(ticker_symbol)
                     hist = stock.history(period="1y")
 
-                    if hist.empty or len(hist) < 5:
+                    if hist.empty:
                         sme_symbol = f"{clean_ticker}-SM.NS"
                         sme_stock = yf.Ticker(sme_symbol)
                         sme_hist = sme_stock.history(period="1y")
-                        if not sme_hist.empty and len(sme_hist) >= 5:
+                        if not sme_hist.empty:
                             ticker_symbol = sme_symbol
                             stock = sme_stock
                             hist = sme_hist
 
-                    if hist.empty or len(hist) < 5:
+                    if hist.empty:
                         resolved_sym, _ = resolve_ticker_online(clean_ticker)
                         if resolved_sym:
                             ticker_symbol = resolved_sym
                             stock = yf.Ticker(ticker_symbol)
                             hist = stock.history(period="1y")
 
-                    if hist.empty or len(hist) < 5:
-                        st.error(f"Could not retrieve trading data for '{clean_ticker}'. Please verify the stock symbol.")
+                    if hist.empty:
+                        st.error(
+                            f"We couldn't find recent price information for "
+                            f"'{clean_ticker}'. Check the symbol and try again."
+                        )
                         st.stop()
 
                     live_price = float(hist["Close"].iloc[-1])
@@ -1829,6 +1912,12 @@ elif active_tab == "🔍 Deep Dive":
                     fundamentals = assess_fundamentals(info)
 
                     technical_signal = calculate_stock_signal(hist, fundamentals)
+                    if len(hist) < 200:
+                        st.info(
+                            "This share has limited trading history. Some technical "
+                            "indicators may be unavailable, so its call will remain "
+                            "cautious until more data is available."
+                        )
                     rsi_value = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1]
                     sma_value = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1]
                     rsi = float(rsi_value) if pd.notna(rsi_value) else None
@@ -1913,8 +2002,11 @@ elif active_tab == "🔍 Deep Dive":
                     else:
                         st.info("No recent news headlines available for this symbol.")
 
-                except Exception as e:
-                    st.error(f"Error analyzing ticker: {e}")
+                except Exception:
+                    st.error(
+                        "We couldn't complete this stock analysis right now. "
+                        "Please check the symbol and try again shortly."
+                    )
 
 # ==============================================================================
 # TAB 5: VIRTUAL BUY-CALL TRACKER
@@ -1928,22 +2020,32 @@ elif active_tab == "📒 Virtual Portfolio":
     bin_id = get_private_setting("JSONBIN_BIN_ID")
     master_key = get_private_setting("JSONBIN_MASTER_KEY")
     if not bin_id or not master_key:
-        st.info("Configure JSONBIN_BIN_ID and JSONBIN_MASTER_KEY to view the shared portfolio.")
+        st.info(
+            "The shared portfolio isn't set up yet. Please contact the app administrator."
+        )
     else:
         if st.button("Refresh portfolio", icon=":material/refresh:"):
             get_latest_trade_prices.clear()
+        portfolio_loaded = False
         try:
             trades = fetch_virtual_trades(bin_id, master_key)
-        except (requests.RequestException, ValueError, KeyError) as exc:
-            st.error(f"Could not load the JSONBin portfolio: {exc}")
+            portfolio_loaded = True
+        except (requests.RequestException, ValueError, KeyError):
+            st.error(
+                "We couldn't load your saved calls right now. "
+                "Please try refreshing in a moment."
+            )
             trades = []
             prices = {}
         else:
             tickers = tuple(sorted({trade["ticker"] for trade in trades if trade.get("ticker")}))
             try:
                 prices = get_latest_trade_prices(tickers)
-            except Exception as exc:
-                st.error(f"Could not retrieve latest stock prices: {exc}")
+            except Exception:
+                st.warning(
+                    "We couldn't update current prices. Your saved calls are shown, "
+                    "but current profit and loss may be unavailable."
+                )
                 prices = {}
 
         if trades:
@@ -2016,8 +2118,8 @@ elif active_tab == "📒 Virtual Portfolio":
                 width="stretch",
                 hide_index=True,
             )
-        else:
-            st.info("No virtual BUY calls have been saved to this JSONBin yet.")
+        elif portfolio_loaded:
+            st.info("No saved BUY calls yet. Eligible new calls will appear here.")
 
 # --- MANDATORY REGULATORY & EDUCATIONAL DISCLAIMER ---
 st.markdown(
