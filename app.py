@@ -9,10 +9,26 @@ import os
 import re
 import json
 import time as time_module
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time, date
+from pathlib import Path
 import pytz
-from bs4 import BeautifulSoup
 from textblob import TextBlob
+from stock_features import (
+    VIRTUAL_INVESTMENT,
+    assess_fundamentals,
+    build_virtual_trade,
+    fetch_virtual_trades,
+    evaluate_ipo_recommendation,
+    is_ipo_application_open,
+    is_active_today_or_future as ipo_is_active,
+    match_ipo_gmp,
+    parse_ipo_detail_html,
+    parse_ipo_gmp_html,
+    parse_ipo_date as parse_ipo_date_value,
+    parse_ipo_schedule_html,
+    sync_virtual_trades,
+)
 
 # --- MOBILE-FIRST PAGE CONFIGURATION ---
 st.set_page_config(
@@ -35,12 +51,13 @@ if "is_generating" not in st.session_state:
     st.session_state.is_generating = False
 
 query_params = st.query_params
-if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "dive"]:
+if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "dive", "portfolio"]:
     nav_map = {
         "watch": "📊 Market Watch",
         "chat": "💬 Stock Chatbot",
         "ipo": "🚀 IPO Hub",
-        "dive": "🔍 Deep Dive"
+        "dive": "🔍 Deep Dive",
+        "portfolio": "📒 Virtual Portfolio",
     }
     st.session_state.current_tab = nav_map[query_params["nav"]]
 
@@ -296,7 +313,7 @@ def get_live_market_data(universe):
                 pct = (chg / prev_close) * 100
                 records.append({
                     "Stock": symbol,
-                    "Live Price (₹)": round(curr_price, 2),
+                    "Latest Price (₹)": round(curr_price, 2),
                     "Change (₹)": round(chg, 2),
                     "% Change": round(pct, 2)
                 })
@@ -372,6 +389,10 @@ def screen_52w_low_strong_picks(universe):
                     tech_notes.append("MACD holds bullish crossover")
 
                 if tech_score >= 2 and momentum_ok:
+                    fundamentals = get_fundamental_snapshot(f"{symbol}.NS")
+                    if not fundamentals["buy_eligible"]:
+                        continue
+
                     sl_short = round(low_52w * 0.98, 2)
                     target_short = round(curr_price * 1.08, 2)
                     sl_long = round(low_52w * 0.95, 2)
@@ -386,6 +407,8 @@ def screen_52w_low_strong_picks(universe):
                         "RSI": round(rsi_val, 1),
                         "Technical Setup": " • ".join(tech_notes),
                         "Technical Verdict": "🟢 Bullish Reversal",
+                        "Fundamental Status": fundamentals["status"],
+                        "Fundamental Summary": fundamentals["summary"],
                         "Short SL": sl_short,
                         "Short Target": target_short,
                         "Long SL": sl_long,
@@ -400,263 +423,147 @@ def screen_52w_low_strong_picks(universe):
     return pd.DataFrame()
 
 # --- DATE PARSER FOR ROLLING EXPIRATION ---
-def parse_ipo_date(date_str: str) -> date:
-    """Parses date string into a datetime.date object. Returns None if unparseable."""
-    if not date_str or date_str.strip() in ["-", "TBD", "Upcoming", "Closing Soon", "Closing Today"]:
-        return None
-
-    today = datetime.now(IST).date()
-    cleaned = re.sub(r'(st|nd|rd|th)', '', date_str).strip()
-
-    formats = [
-        "%d-%b-%Y", "%d %b %Y", "%d-%b", "%d %b",
-        "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"
-    ]
-
-    for fmt in formats:
-        try:
-            parsed = datetime.strptime(cleaned, fmt).date()
-            if fmt in ["%d-%b", "%d %b"]:
-                parsed = parsed.replace(year=today.year)
-            return parsed
-        except ValueError:
-            continue
-
-    match = re.search(r'(\d{1,2})\s*[-/ ]\s*([A-Za-z]{3})', cleaned)
-    if match:
-        day_val = int(match.group(1))
-        mon_str = match.group(2)
-        try:
-            return datetime.strptime(f"{day_val} {mon_str} {today.year}", "%d %b %Y").date()
-        except Exception:
-            pass
-
-    return None
+def parse_ipo_date(date_str: str) -> date | None:
+    return parse_ipo_date_value(date_str, today=datetime.now(IST).date())
 
 def is_active_today_or_future(close_date_str: str) -> bool:
-    """
-    Returns True if close_date is today or in the future.
-    Returns False if close_date passed yesterday or earlier (removes expired IPOs).
-    """
-    close_dt = parse_ipo_date(close_date_str)
-    if close_dt is None:
-        return True
+    return ipo_is_active(close_date_str, today=datetime.now(IST).date())
 
-    today = datetime.now(IST).date()
-    return close_dt >= today
-
-# --- 6. REAL-TIME IPO HUB (FAST 15s TTL CACHE) ---
-@st.cache_data(ttl=15)
-def fetch_live_ipo_gmp():
-    """
-    Fetches real-time ongoing & upcoming IPOs with live GMP.
-    Filters out any issue whose closing date has elapsed.
-    """
-    session = requests.Session()
+# --- 6. LIVE IPO HUB ---
+def request_ipo_company_fundamentals(details_url: str):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Referer": "https://www.google.com/"
+        "Referer": "https://www.chittorgarh.com/",
     }
+    response = requests.get(details_url, headers=headers, timeout=10)
+    response.raise_for_status()
+    return parse_ipo_detail_html(response.content)
 
-    today = datetime.now(IST).date()
-    ipo_records = []
-    seen = set()
 
-    try:
-        url = "https://www.investorgain.com/report/live-ipo-gmp/331/all/"
-        resp = session.get(url, headers=headers, timeout=6)
-        if resp.status_code == 200:
-            soup = BeautifulSoup(resp.content, "html.parser")
-            table = soup.find("table")
-            if table:
-                rows = table.find_all("tr")
-                header_cols = [c.get_text(strip=True).lower() for c in rows[0].find_all(["th", "td"])]
-
-                name_idx = next((i for i, h in enumerate(header_cols) if "ipo" in h or "company" in h), 0)
-                gmp_idx = next((i for i, h in enumerate(header_cols) if "gmp" in h), 1)
-                price_idx = next((i for i, h in enumerate(header_cols) if "price" in h), 2)
-                open_idx = next((i for i, h in enumerate(header_cols) if "open" in h), -2)
-                close_idx = next((i for i, h in enumerate(header_cols) if "close" in h), -1)
-
-                for r in rows[1:]:
-                    tds = r.find_all("td")
-                    if len(tds) >= 5:
-                        raw_name = tds[name_idx].get_text(strip=True) if name_idx < len(tds) else ""
-                        gmp_raw = tds[gmp_idx].get_text(strip=True) if gmp_idx < len(tds) else ""
-                        price_raw = tds[price_idx].get_text(strip=True) if price_idx < len(tds) else "0"
-                        open_dt = tds[open_idx].get_text(strip=True) if open_idx < len(tds) else "TBD"
-                        close_dt = tds[close_idx].get_text(strip=True) if close_idx < len(tds) else "TBD"
-
-                        clean_name = re.sub(r'(?i)(IPOU|IPOC|IPOL|IPOO|NSE|BSE|SME|Allotted|SMEO|SMEU|SMEC|Closing Today|CT).*', '', raw_name).strip()
-
-                        if not clean_name or clean_name.lower() in seen:
-                            continue
-
-                        if not is_active_today_or_future(close_dt):
-                            continue
-
-                        seen.add(clean_name.lower())
-                        is_sme = "SME" in raw_name.upper()
-
-                        p_match = re.search(r'([\d\.]+)', price_raw)
-                        issue_p = float(p_match.group(1)) if p_match else 0.0
-
-                        gmp_m = re.search(r'₹?\s*([\d\.]+)', gmp_raw)
-                        pct_m = re.search(r'\(([\d\.]+)%\)', gmp_raw)
-                        gmp_val = float(gmp_m.group(1)) if gmp_m else 0.0
-                        gmp_pct = float(pct_m.group(1)) if pct_m else (round((gmp_val / issue_p) * 100, 1) if issue_p > 0 else 0.0)
-
-                        parsed_c = parse_ipo_date(close_dt)
-                        parsed_o = parse_ipo_date(open_dt)
-
-                        if parsed_c and parsed_c == today:
-                            status_label = "Ongoing (Closing Today)"
-                        elif parsed_o and parsed_o <= today:
-                            status_label = "Ongoing (Open)"
-                        else:
-                            status_label = "Upcoming"
-
-                        recom = "STRONG APPLY" if gmp_pct >= 30 else ("APPLY (Listing Gain)" if gmp_pct >= 15 else ("NEUTRAL / CAUTION" if gmp_pct >= 5 else "AVOID"))
-
-                        ipo_records.append({
-                            "Company": clean_name,
-                            "Status": status_label,
-                            "Type": "SME" if is_sme else "Mainboard",
-                            "Issue Price (₹)": issue_p,
-                            "GMP (₹)": gmp_val,
-                            "Est Gain %": gmp_pct,
-                            "Lot Size": "Standard",
-                            "Subscription": "-",
-                            "Open Date": open_dt,
-                            "Close Date": close_dt,
-                            "Recommendation": recom,
-                            "Analysis & Rationale": f"Estimated listing premium of {gmp_pct:.1f}% based on live grey market trends."
-                        })
-    except Exception:
-        pass
-
-    master_live_calendar = [
-        # Active Ongoing Issues
-        {
-            "Company": "Veegaland Developers", "Status": "Ongoing (Open)", "Type": "Mainboard", "Issue Price (₹)": 140.0,
-            "GMP (₹)": 30.0, "Est Gain %": 21.4, "Lot Size": "107", "Subscription": "1.2x", "Open Date": "10-Sep-2026",
-            "Close Date": "15-Sep-2026", "Recommendation": "APPLY (Listing Gain)",
-            "Analysis & Rationale": "Healthy 21% listing cushion with solid South Indian residential footprint."
-        },
-        {
-            "Company": "Manika Plastech", "Status": "Ongoing (Open)", "Type": "Mainboard", "Issue Price (₹)": 43.0,
-            "GMP (₹)": 20.0, "Est Gain %": 46.5, "Lot Size": "348", "Subscription": "2.4x", "Open Date": "11-Sep-2026",
-            "Close Date": "16-Sep-2026", "Recommendation": "STRONG APPLY",
-            "Analysis & Rationale": "Strong 46%+ Grey Market Premium in technical polymer packaging."
-        },
-        {
-            "Company": "Maharaja & Speedex India", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 186.0,
-            "GMP (₹)": 15.0, "Est Gain %": 8.1, "Lot Size": "600", "Subscription": "0.9x", "Open Date": "10-Sep-2026",
-            "Close Date": "15-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "BSE SME issue with modest 8% listing buffer."
-        },
-        {
-            "Company": "Om Galaxy", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 90.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,600", "Subscription": "0.4x", "Open Date": "10-Sep-2026",
-            "Close Date": "15-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Nil grey market premium on BSE SME."
-        },
-        {
-            "Company": "Raksan Transformers", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 273.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "400", "Subscription": "0.8x", "Open Date": "10-Sep-2026",
-            "Close Date": "15-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Flat premium; evaluate post-listing price action before entry."
-        },
-        {
-            "Company": "Panchatv Bharat", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 140.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,000", "Subscription": "0.1x", "Open Date": "10-Sep-2026",
-            "Close Date": "15-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Subdued early demand on BSE SME."
-        },
-        {
-            "Company": "Century Business Media", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 74.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,600", "Subscription": "-", "Open Date": "11-Sep-2026",
-            "Close Date": "16-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "BSE SME offering with flat grey market cues."
-        },
-        {
-            "Company": "Injecto Polymers", "Status": "Ongoing (Open)", "Type": "SME", "Issue Price (₹)": 100.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,200", "Subscription": "-", "Open Date": "11-Sep-2026",
-            "Close Date": "16-Sep-2026", "Recommendation": "AVOID",
-            "Analysis & Rationale": "Industrial polymers manufacturer with no current premium trades."
-        },
-
-        # Upcoming Issues
-        {
-            "Company": "Hero Motors", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 84.0,
-            "GMP (₹)": 9.0, "Est Gain %": 10.7, "Lot Size": "178", "Subscription": "-", "Open Date": "16-Sep-2026",
-            "Close Date": "18-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Auto component giant entering the primary market next week."
-        },
-        {
-            "Company": "Jindal Supreme (India)", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 93.0,
-            "GMP (₹)": 19.0, "Est Gain %": 20.4, "Lot Size": "161", "Subscription": "-", "Open Date": "16-Sep-2026",
-            "Close Date": "18-Sep-2026", "Recommendation": "APPLY (Listing Gain)",
-            "Analysis & Rationale": "20%+ listing gain expectation backed by industrial pipeline demand."
-        },
-        {
-            "Company": "SS Retail", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 424.0,
-            "GMP (₹)": 30.0, "Est Gain %": 7.1, "Lot Size": "35", "Subscription": "-", "Open Date": "16-Sep-2026",
-            "Close Date": "18-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Multi-brand apparel retail chain with steady expansion."
-        },
-        {
-            "Company": "National Stock Exchange of India (NSE IPO)", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 1785.0,
-            "GMP (₹)": 188.0, "Est Gain %": 10.5, "Lot Size": "8", "Subscription": "-", "Open Date": "17-Sep-2026",
-            "Close Date": "21-Sep-2026", "Recommendation": "STRONG APPLY",
-            "Analysis & Rationale": "Historic exchange listing. Compounding asset with robust trading volumes."
-        },
-        {
-            "Company": "Sonaselection India", "Status": "Upcoming", "Type": "Mainboard", "Issue Price (₹)": 99.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "150", "Subscription": "-", "Open Date": "17-Sep-2026",
-            "Close Date": "21-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Mainboard consumer retail issue opening late next week."
-        },
-        {
-            "Company": "Vama Wovenfab", "Status": "Upcoming", "Type": "SME", "Issue Price (₹)": 341.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "400", "Subscription": "-", "Open Date": "15-Sep-2026",
-            "Close Date": "17-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "BSE SME technical textile offering opening Tuesday."
-        },
-        {
-            "Company": "Shakti Polytarp", "Status": "Upcoming", "Type": "SME", "Issue Price (₹)": 59.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "2,000", "Subscription": "-", "Open Date": "15-Sep-2026",
-            "Close Date": "17-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Tarpaulin manufacturer debuting on SME platform next week."
-        },
-        {
-            "Company": "Quanto Agroworld", "Status": "Upcoming", "Type": "SME", "Issue Price (₹)": 67.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "2,000", "Subscription": "-", "Open Date": "15-Sep-2026",
-            "Close Date": "17-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Agri-inputs SME issue opening on September 15."
-        },
-        {
-            "Company": "SpectraA Technology Solutions", "Status": "Upcoming", "Type": "SME", "Issue Price (₹)": 118.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "1,200", "Subscription": "-", "Open Date": "17-Sep-2026",
-            "Close Date": "21-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Turnkey engineering solutions provider on NSE Emerge."
-        },
-        {
-            "Company": "Axiom Gas Engineering", "Status": "Upcoming", "Type": "SME", "Issue Price (₹)": 53.0,
-            "GMP (₹)": 0.0, "Est Gain %": 0.0, "Lot Size": "2,000", "Subscription": "-", "Open Date": "18-Sep-2026",
-            "Close Date": "22-Sep-2026", "Recommendation": "NEUTRAL / CAUTION",
-            "Analysis & Rationale": "Gas distribution equipment specialist debuting late next week."
+@st.cache_data(ttl=900)
+def fetch_ipo_fundamentals(detail_urls: tuple[str, ...]):
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(detail_urls))) as executor:
+        detail_requests = {
+            executor.submit(request_ipo_company_fundamentals, url): url
+            for url in detail_urls
         }
-    ]
+        for future in as_completed(detail_requests):
+            url = detail_requests[future]
+            try:
+                results[url] = {"fundamentals": future.result(), "error": None}
+            except (requests.RequestException, ValueError) as exc:
+                results[url] = {"fundamentals": {}, "error": str(exc)}
+    return results
 
-    for item in master_live_calendar:
-        if item["Company"].lower() not in seen:
-            if is_active_today_or_future(item["Close Date"]):
-                ipo_records.append(item)
-                seen.add(item["Company"].lower())
 
-    return pd.DataFrame(ipo_records)
+@st.cache_data(ttl=300)
+def fetch_live_ipo_gmp():
+    """Fetch active IPO schedules, current GMP, and issuer financials."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Referer": "https://www.chittorgarh.com/",
+    }
+    today = datetime.now(IST).date()
+    schedule_sources = {
+        "Mainboard": "https://www.chittorgarh.com/ipo/ipo_dashboard.asp",
+        "SME": "https://www.chittorgarh.com/ipo/ipo_dashboard.asp?a=sme",
+    }
+    session = requests.Session()
+    session.headers.update(headers)
+    ipo_records = []
+    for board, url in schedule_sources.items():
+        response = session.get(url, timeout=15)
+        response.raise_for_status()
+        ipo_records.extend(
+            parse_ipo_schedule_html(
+                response.content,
+                board=board,
+                today=today,
+                now=datetime.now(IST),
+            )
+        )
+
+    if not ipo_records:
+        return pd.DataFrame(), "No upcoming or currently open IPOs were found."
+
+    gmp_error = None
+    try:
+        gmp_response = session.get(
+            "https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/",
+            timeout=15,
+        )
+        gmp_response.raise_for_status()
+        gmp_records = parse_ipo_gmp_html(gmp_response.content)
+    except (requests.RequestException, ValueError) as exc:
+        gmp_records = []
+        gmp_error = f"Live GMP could not be verified: {exc}"
+
+    page_fetched_at = datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST")
+    for ipo in ipo_records:
+        gmp_record = match_ipo_gmp(ipo["Company"], ipo["Type"], gmp_records)
+        ipo["GMP (₹)"] = gmp_record["GMP (₹)"] if gmp_record else None
+        ipo["Issue Price (₹)"] = gmp_record["Issue Price (₹)"] if gmp_record else None
+        ipo["Est Gain %"] = gmp_record["Est Gain %"] if gmp_record else None
+        ipo["GMP Source URL"] = (
+            gmp_record["GMP Source URL"] if gmp_record else "https://ipowatch.in/"
+        )
+
+    fundamentals_by_url = fetch_ipo_fundamentals(
+        tuple(ipo["IPO Details URL"] for ipo in ipo_records)
+    )
+    for ipo in ipo_records:
+        detail = fundamentals_by_url[ipo["IPO Details URL"]]
+        fundamentals = detail["fundamentals"]
+        if detail["error"]:
+            ipo["Fundamental Source Status"] = (
+                f"Issuer financials unavailable: {detail['error']}"
+            )
+        else:
+            ipo["Fundamental Source Status"] = (
+                "Issuer financial tables loaded"
+                if any(
+                    key in fundamentals
+                    for key in (
+                        "latest_revenue",
+                        "latest_pat",
+                        "roe",
+                        "roce",
+                        "debt_equity",
+                        "pat_margin",
+                    )
+                )
+                else "No financial ratios or annual figures found"
+            )
+
+        if ipo["Issue Price (₹)"] is None:
+            ipo["Issue Price (₹)"] = fundamentals.get("issue_price")
+        ipo["Price Band"] = fundamentals.get("price_band", "Not reported")
+        ipo["Lot Size"] = fundamentals.get("lot_size", "Not reported")
+        ipo["Issue Size"] = fundamentals.get("issue_size", "Not reported")
+        ipo["Est Gain %"] = (
+            round(ipo["GMP (₹)"] / ipo["Issue Price (₹)"] * 100, 2)
+            if ipo["GMP (₹)"] is not None
+            and ipo["Issue Price (₹)"] is not None
+            and ipo["Issue Price (₹)"] > 0
+            else None
+        )
+        recommendation = evaluate_ipo_recommendation(
+            fundamentals,
+            ipo["GMP (₹)"],
+            ipo["Issue Price (₹)"],
+        )
+        ipo.update(recommendation)
+        ipo["Fundamental Summary"] = (
+            f"{recommendation['Fundamental Summary']} "
+            f"Data status: {ipo['Fundamental Source Status']}."
+        )
+        ipo["Page Fetched At"] = page_fetched_at
+        ipo["Fundamental Source URL"] = ipo["IPO Details URL"]
+
+    return pd.DataFrame(ipo_records), gmp_error
 
 # --- 7. CLOUD-SAFE NEWS FETCHING ---
 def fetch_cloud_safe_news(ticker_obj, symbol):
@@ -694,12 +601,158 @@ def fetch_cloud_safe_news(ticker_obj, symbol):
 
 # --- 8. API KEY RETRIEVAL ---
 def get_gemini_api_key():
+    return get_private_setting("GEMINI_API_KEY")
+
+# --- 8A. FUNDAMENTALS AND VIRTUAL TRADE LEDGER ---
+@st.cache_data(ttl=900, max_entries=256)
+def get_fundamental_snapshot(ticker: str) -> dict:
     try:
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            return str(st.secrets["GEMINI_API_KEY"]).strip()
-    except Exception:
-        pass
-    return os.getenv("GEMINI_API_KEY", "").strip()
+        info = yf.Ticker(ticker).info or {}
+    except Exception as exc:
+        result = assess_fundamentals({})
+        result["summary"] = f"Fundamental data unavailable ({type(exc).__name__})."
+        return result
+    return assess_fundamentals(info)
+
+
+def get_private_setting(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+
+    secrets_path = Path(__file__).parent / ".streamlit" / "secrets.toml"
+    if secrets_path.is_file():
+        return str(st.secrets.get(name, "")).strip()
+    return ""
+
+
+def format_fundamental_assessment(fundamentals: dict) -> str:
+    values = []
+    for key, label, multiplier, suffix in (
+        ("roe", "ROE", 100, "%"),
+        ("profit_margin", "Profit margin", 100, "%"),
+        ("debt_to_equity", "Debt/equity", 1, "%"),
+        ("net_income", "Net income", 1 / 1e7, " Cr"),
+    ):
+        value = fundamentals.get(key)
+        if value is not None:
+            values.append(f"{label}: {value * multiplier:,.1f}{suffix}")
+    detail = " | ".join(values) if values else "Metrics unavailable"
+    checks = " | ".join(
+        f"{'✓' if passed else '✗'} {label}"
+        for label, passed in fundamentals.get("checks", [])
+    )
+    check_detail = f" Checks: {checks}." if checks else ""
+    return (
+        f"**Fundamentals: {fundamentals['status']}** — "
+        f"{fundamentals['summary']} ({detail}).{check_detail}"
+    )
+
+
+def make_buy_call(
+    ticker: str,
+    company: str,
+    source: str,
+    horizon: str,
+    entry_price: float,
+    target_price: float,
+    stop_loss: float,
+    fundamentals: dict,
+    quote_as_of: str | None = None,
+) -> dict:
+    return {
+        "ticker": ticker,
+        "company": company,
+        "source": source,
+        "horizon": horizon,
+        "entry_price": entry_price,
+        "target_price": target_price,
+        "stop_loss": stop_loss,
+        "fundamental_status": fundamentals["status"],
+        "fundamental_summary": fundamentals["summary"],
+        "quote_as_of": quote_as_of or datetime.now(IST).strftime("%d %b %Y"),
+    }
+
+
+def register_buy_calls(calls: list[dict]) -> None:
+    eligible_calls = [
+        call
+        for call in calls
+        if call.get("fundamental_status") == "Pass"
+        and call.get("entry_price")
+        and call.get("target_price")
+        and call.get("stop_loss")
+    ]
+    if not eligible_calls:
+        return
+
+    bin_id = get_private_setting("JSONBIN_BIN_ID")
+    master_key = get_private_setting("JSONBIN_MASTER_KEY")
+    if not bin_id or not master_key:
+        if not st.session_state.get("jsonbin_config_notice_shown", False):
+            st.info("Paper-trade logging is not configured. Set JSONBIN_BIN_ID and JSONBIN_MASTER_KEY to save BUY calls.")
+            st.session_state.jsonbin_config_notice_shown = True
+        return
+
+    called_at = datetime.now(IST)
+    logged_ids = st.session_state.setdefault("logged_virtual_call_ids", set())
+    pending_calls = [
+        call
+        for call in eligible_calls
+        if build_virtual_trade(call, called_at=called_at)["id"] not in logged_ids
+    ]
+    if not pending_calls:
+        return
+
+    try:
+        result = sync_virtual_trades(
+            pending_calls,
+            bin_id,
+            master_key,
+            called_at=called_at,
+        )
+    except (requests.RequestException, ValueError) as exc:
+        st.error(f"Could not save the paper trade to JSONBin: {exc}")
+        return
+
+    logged_ids.update(
+        build_virtual_trade(call, called_at=called_at)["id"]
+        for call in pending_calls
+    )
+    if result["added"]:
+        st.success(
+            f"Logged {result['added']} virtual BUY call(s), ₹{VIRTUAL_INVESTMENT:,.0f} each."
+        )
+
+
+@st.cache_data(ttl=60, max_entries=64)
+def get_latest_trade_prices(tickers: tuple[str, ...]) -> dict[str, float]:
+    if not tickers:
+        return {}
+    data = yf.download(
+        list(tickers),
+        period="5d",
+        interval="1d",
+        progress=False,
+        auto_adjust=False,
+    )
+    if data.empty:
+        return {}
+    closes = data["Close"] if "Close" in data.columns else data
+    prices = {}
+    if isinstance(closes, pd.Series) and len(tickers) == 1:
+        values = closes.dropna()
+        if not values.empty:
+            return {tickers[0]: float(values.iloc[-1])}
+    for ticker in tickers:
+        if ticker in closes.columns:
+            values = closes[ticker].dropna()
+        else:
+            continue
+        if not values.empty:
+            prices[ticker] = float(values.iloc[-1])
+    return prices
+
 
 # --- 9. CONVERSATIONAL ENTITY & CONTEXT RESOLVER ---
 def get_live_market_context_for_query(query: str):
@@ -745,6 +798,7 @@ def get_live_market_context_for_query(query: str):
         "ticker": ticker_found,
         "company": company_name,
         "price": None,
+        "quote_as_of": None,
         "rsi": None,
         "sma_50": None,
         "pe": None,
@@ -754,6 +808,7 @@ def get_live_market_context_for_query(query: str):
         "ebitda_cr": None,
         "eps": None,
         "profit_margin": None,
+        "fundamentals": assess_fundamentals({}),
         "context_text": ""
     }
 
@@ -761,6 +816,7 @@ def get_live_market_context_for_query(query: str):
         try:
             stock = yf.Ticker(ticker_found)
             info = stock.info or {}
+            context_dict["fundamentals"] = assess_fundamentals(info)
             hist = stock.history(period="3mo")
 
             if hist.empty:
@@ -771,9 +827,11 @@ def get_live_market_context_for_query(query: str):
                     stock = sme_stock
                     hist = sme_hist
                     info = stock.info or {}
+                    context_dict["fundamentals"] = assess_fundamentals(info)
 
             if not hist.empty:
                 context_dict["price"] = float(hist["Close"].iloc[-1])
+                context_dict["quote_as_of"] = hist.index[-1].strftime("%d %b %Y")
                 context_dict["rsi"] = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
                 context_dict["sma_50"] = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
 
@@ -799,7 +857,10 @@ def get_live_market_context_for_query(query: str):
 
             lines = [f"[VERIFIED METRICS FOR ACTIVE STOCK: {company_name} ({ticker_found})]"]
             if context_dict["price"]:
-                lines.append(f"- Current Market Price (LTP): ₹{context_dict['price']:,.2f}")
+                lines.append(
+                    f"- Latest available price snapshot: ₹{context_dict['price']:,.2f} "
+                    f"({context_dict['quote_as_of']})"
+                )
             if context_dict["net_income_cr"]:
                 lines.append(f"- Annual Net Profit (Net Income): ₹{context_dict['net_income_cr']:,.2f} Crores")
             if context_dict["revenue_cr"]:
@@ -816,6 +877,11 @@ def get_live_market_context_for_query(query: str):
                 lines.append(f"- 50-day SMA: ₹{context_dict['sma_50']:,.2f}")
             if context_dict["pe"]:
                 lines.append(f"- Trailing P/E: {context_dict['pe']}")
+            lines.append(
+                "- Fundamental screen: "
+                f"{context_dict['fundamentals']['status']} — "
+                f"{context_dict['fundamentals']['summary']}"
+            )
 
             context_dict["context_text"] = "\n".join(lines)
         except Exception:
@@ -842,7 +908,7 @@ def call_gemini_rest_api(prompt: str, api_key: str):
     last_error = ""
 
     for model_name in target_models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=12)
             if resp.status_code == 200:
@@ -861,14 +927,14 @@ def call_gemini_rest_api(prompt: str, api_key: str):
             last_error = f"{model_name} -> {str(e)}"
 
     try:
-        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_url = "https://generativelanguage.googleapis.com/v1beta/models"
         list_resp = requests.get(list_url, headers=headers, timeout=8)
         if list_resp.status_code == 200:
             for m in list_resp.json().get("models", []):
                 name = m.get("name", "").replace("models/", "")
                 methods = m.get("supportedGenerationMethods", [])
                 if "generateContent" in methods and "flash" in name.lower() and "pro" not in name.lower():
-                    run_url = f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent?key={api_key}"
+                    run_url = f"https://generativelanguage.googleapis.com/v1beta/models/{name}:generateContent"
                     resp = requests.post(run_url, headers=headers, json=payload, timeout=12)
                     if resp.status_code == 200:
                         parts = resp.json().get("candidates", [])[0].get("content", {}).get("parts", [])
@@ -895,13 +961,18 @@ def stream_chatbot_response(user_query: str):
         You are an Indian Equity Market & Financial Intelligence Analyst for the NSE/BSE.
         Provide a concise, direct, professional answer to the user's latest question.
         Use clean markdown bullet points, bold financial totals in ₹ Crores or %, and clear key support/resistance levels.
+        Check the verified fundamental screen before making any BUY recommendation.
+        If the user asks for an actionable stock call, end with exactly one line:
+        Signal: BUY, Signal: HOLD, or Signal: SELL.
+        A BUY must include a numeric Target Price higher than the verified entry price.
+        Never report a BUY when the fundamental screen fails or has insufficient data.
         If the user uses pronouns like "it", "this share", or refers back to the prior topic, answer in relation to the active stock.
         If the user switched to a completely different stock, address the new stock immediately.
 
         RECENT CONVERSATION HISTORY:
         {recent_history}
 
-        VERIFIED LIVE DATA FOR ACTIVE ASSET:
+        VERIFIED LATEST PRICE SNAPSHOT AND FUNDAMENTALS FOR ACTIVE ASSET:
         {context['context_text']}
 
         LATEST USER QUESTION:
@@ -909,6 +980,7 @@ def stream_chatbot_response(user_query: str):
         """
         ai_reply = call_gemini_rest_api(prompt, api_key)
         if ai_reply and not ai_reply.startswith("ERROR:"):
+            ai_reply = record_chatbot_buy_if_eligible(ai_reply, context)
             for word in ai_reply.split(" "):
                 yield word + " "
                 time_module.sleep(0.01)
@@ -917,9 +989,69 @@ def stream_chatbot_response(user_query: str):
             yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
 
     static_reply = process_universal_chatbot_static(user_query, context)
+    static_reply = record_chatbot_buy_if_eligible(static_reply, context)
     for word in static_reply.split(" "):
         yield word + " "
         time_module.sleep(0.015)
+
+
+def record_chatbot_buy_if_eligible(reply: str, context: dict) -> str:
+    signal_match = re.search(
+        r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?Signal(?:\*\*)?\s*:\s*(BUY|HOLD|SELL)\b",
+        reply,
+    )
+    if not signal_match or signal_match.group(1).upper() != "BUY":
+        return reply
+
+    ticker = context.get("ticker")
+    entry_price = context.get("price")
+    fundamentals = context.get("fundamentals") or assess_fundamentals({})
+    if not ticker:
+        return reply
+    if not entry_price or not fundamentals["buy_eligible"]:
+        reason = fundamentals["summary"] if not fundamentals["buy_eligible"] else "No verified stock price is available."
+        reply = re.sub(
+            r"(?im)^(\s*(?:[-*]\s*)?(?:\*\*)?Signal(?:\*\*)?\s*:\s*)BUY\b",
+            r"\1HOLD",
+            reply,
+            count=1,
+        )
+        return f"{reply}\n\n**BUY call withheld:** {reason}"
+
+    target_match = re.search(
+        r"(?im)^.*?target(?:\s+price)?[^\d\n]*₹?\s*([\d,]+(?:\.\d+)?)",
+        reply,
+    )
+    target_price = (
+        float(target_match.group(1).replace(",", ""))
+        if target_match
+        else round(float(entry_price) * 1.08, 2)
+    )
+    if target_price <= float(entry_price):
+        target_price = round(float(entry_price) * 1.08, 2)
+    stop_loss = round(float(entry_price) * 0.95, 2)
+    register_buy_calls(
+        [
+            make_buy_call(
+                ticker,
+                context.get("company") or ticker,
+                "Stock Chatbot",
+                "Chatbot call",
+                float(entry_price),
+                target_price,
+                stop_loss,
+                fundamentals,
+                quote_as_of=context.get("quote_as_of"),
+            )
+        ]
+    )
+    return (
+        f"{reply}\n\n"
+        f"**Paper trade snapshot:** ₹{float(entry_price):,.2f} entry | "
+        f"₹{target_price:,.2f} target | ₹{stop_loss:,.2f} stop-loss | "
+        f"₹{VIRTUAL_INVESTMENT:,.0f} virtual investment."
+    )
+
 
 def process_universal_chatbot_static(user_query: str, context: dict):
     upper = user_query.upper()
@@ -954,39 +1086,80 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         low_52w = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
         is_open, _, _ = get_market_status()
 
-        resp = "### 🎯 Best Stock Opportunities Right Now (Algorithmic Selection)\n\n"
-
+        resp = "### 🎯 Watchlist candidates based on recent price moves\n\n"
+        buy_calls = []
+        candidates = []
         if not gainers.empty and len(gainers) >= 2:
-            m_pick = gainers.iloc[1]["Stock"]
-            m_price = gainers.iloc[1]["Live Price (₹)"]
-            resp += (
-                f"**1. Momentum Breakout (Short-Term 1–3 Weeks):**\n"
-                f"- **Stock:** `{m_pick}` (LTP: ₹{m_price:,.2f})\n"
-                f"- **Setup:** Volume-backed expansion above short-term pivot.\n"
-                f"- **Action:** Buy on minor pullback | **Target:** ₹{m_price * 1.06:,.2f} | **Stop-Loss:** ₹{m_price * 0.97:,.2f}\n\n"
+            candidates.append(
+                (
+                    gainers.iloc[1]["Stock"],
+                    float(gainers.iloc[1]["Latest Price (₹)"]),
+                    "Short-term momentum",
+                    1.06,
+                    0.97,
+                    "Recent positive price move; daily data does not confirm volume or a breakout.",
+                )
             )
 
         if not losers.empty and len(losers) >= 1:
-            r_pick = losers.iloc[0]["Stock"]
-            r_price = losers.iloc[0]["Live Price (₹)"]
-            resp += (
-                f"**2. Mean-Reversion Dip (Short-Term 1–2 Weeks):**\n"
-                f"- **Stock:** `{r_pick}` (LTP: ₹{r_price:,.2f})\n"
-                f"- **Setup:** Intraday selling exhaustion; attractive risk-reward for technical bounce.\n"
-                f"- **Action:** Accumulate near ₹{r_price:,.2f} | **Target:** ₹{r_price * 1.05:,.2f} | **Stop-Loss:** ₹{r_price * 0.96:,.2f}\n\n"
+            candidates.append(
+                (
+                    losers.iloc[0]["Stock"],
+                    float(losers.iloc[0]["Latest Price (₹)"]),
+                    "Short-term rebound",
+                    1.05,
+                    0.96,
+                    "Recent negative price move; a decline alone does not confirm selling exhaustion.",
+                )
             )
 
         if not low_52w.empty:
             v_row = low_52w.iloc[0]
-            resp += (
-                f"**3. Value + Technical Reversal (Long-Term 6–18 Months):**\n"
-                f"- **Stock:** `{v_row['Stock']}` (Base at ₹{v_row['Price']:,.2f})\n"
-                f"- **Setup:** Healthy balance sheet near 52-week support with bullish technical indicators ({v_row['Technical Setup']}).\n"
-                f"- **Action:** Accumulate for long term | **Target:** ₹{v_row['Long Target']:,.2f} | **Stop-Loss:** ₹{v_row['Long SL']:,.2f}\n\n"
+            candidates.append(
+                (
+                    v_row["Stock"],
+                    float(v_row["Price"]),
+                    "Long-term 52-week value screen",
+                    float(v_row["Long Target"]) / float(v_row["Price"]),
+                    float(v_row["Long SL"]) / float(v_row["Price"]),
+                    f"52-week support and technical screen ({v_row['Technical Setup']}).",
+                )
             )
 
-        timing_note = "Market is open. Confirm setups using intraday VWAP." if is_open else "Market is closed. Levels apply to the next active session."
-        resp += f"> **Context:** {timing_note}\n\n*Always maintain strict stop-loss rules.*"
+        for index, (symbol, entry_price, horizon, target_factor, stop_factor, reason) in enumerate(candidates, 1):
+            fundamentals = get_fundamental_snapshot(f"{symbol}.NS")
+            target_price = round(entry_price * target_factor, 2)
+            stop_loss = round(entry_price * stop_factor, 2)
+            if fundamentals["buy_eligible"]:
+                signal = "BUY"
+                buy_calls.append(
+                    make_buy_call(
+                        f"{symbol}.NS",
+                        symbol,
+                        "Stock Chatbot watchlist",
+                        horizon,
+                        entry_price,
+                        target_price,
+                        stop_loss,
+                        fundamentals,
+                    )
+                )
+            else:
+                signal = "HOLD"
+            resp += (
+                f"**{index}. `{symbol}` — {horizon}**\n"
+                f"- **Signal:** {signal}\n"
+                f"- **Entry snapshot / target / stop:** ₹{entry_price:,.2f} / "
+                f"₹{target_price:,.2f} / ₹{stop_loss:,.2f}\n"
+                f"- **Reason:** {reason}\n"
+                f"- {format_fundamental_assessment(fundamentals)}\n\n"
+            )
+
+        if not candidates:
+            resp += "No candidates are available because the latest price data could not be loaded.\n\n"
+        timing_note = "Market is open." if is_open else "Market is closed; prices may be from the last completed session."
+        resp += f"> {timing_note} Each eligible BUY uses ₹{VIRTUAL_INVESTMENT:,.0f} of virtual capital."
+        register_buy_calls(buy_calls)
         return resp
 
     if comp and any(w in upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
@@ -994,19 +1167,23 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         rsi = context.get("rsi") or 50.0
         sma_50 = context.get("sma_50") or curr_price
         is_bullish = (rsi < 65) and (curr_price >= sma_50)
+        fundamentals = context.get("fundamentals") or assess_fundamentals({})
+        is_buy = is_bullish and fundamentals["buy_eligible"]
         bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
+        signal = "BUY" if is_buy else "HOLD"
+        target_price = round(curr_price * 1.06, 2)
 
         return (
             f"### Short-Term Outlook for **{comp}** (`{ticker}`)\n\n"
-            f"- **Current Market Price (LTP):** ₹{curr_price:,.2f}\n"
+            f"- **Latest available price snapshot:** ₹{curr_price:,.2f}\n"
             f"- **14-Day RSI:** {rsi:.1f} " + ("*(Overbought)*" if rsi > 70 else "*(Oversold)*" if rsi < 35 else "*(Neutral)*") + "\n"
             f"- **50-Day Moving Average:** ₹{sma_50:,.2f} (" + ("Price is Above" if curr_price >= sma_50 else "Price is Below") + ")\n\n"
             f"**Verdict:** **{bias}**\n\n" +
             (
-                f"Momentum favors buyers above ₹{sma_50:,.2f}. Estimated swing targets: **₹{curr_price * 1.04:,.2f} – ₹{curr_price * 1.07:,.2f}**, with stop-loss protection near **₹{curr_price * 0.97:,.2f}**."
+                f"Estimated swing target: **₹{target_price:,.2f}**, with stop-loss protection near **₹{curr_price * 0.95:,.2f}**."
                 if is_bullish else
                 f"A sudden sharp hike is less probable over immediate sessions due to moving average resistance or cooling momentum. Wait for consolidation before taking fresh long positions."
-            )
+            ) + f"\n\n{format_fundamental_assessment(fundamentals)}\n\n**Signal:** {signal}"
         )
 
     if comp and any(w in upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
@@ -1025,16 +1202,17 @@ def process_universal_chatbot_static(user_query: str, context: dict):
                 "Strong capital returns and balance sheet health support staggered long-term accumulation on pullbacks."
                 if roe >= 15.0 else
                 "Return ratios are moderate. Track upcoming quarterly margin sustainability before committing long-term capital."
-            )
+            ) + f"\n\n{format_fundamental_assessment(context.get('fundamentals') or assess_fundamentals({}))}"
         )
 
     if comp:
         return (
             f"### Snapshot for **{comp}** (`{ticker}`)\n\n"
-            f"- **Live Price (LTP):** ₹{context.get('price', 0.0):,.2f}\n"
+            f"- **Latest available price snapshot:** ₹{context.get('price', 0.0):,.2f}\n"
             f"- **Annual Net Profit:** ₹{context.get('net_income_cr', 0.0):,.2f} Crores\n"
             f"- **RSI (14):** {context.get('rsi', 0.0):.1f}\n"
             f"- **Trailing P/E:** {context.get('pe', 'N/A')}\n\n"
+            f"{format_fundamental_assessment(context.get('fundamentals') or assess_fundamentals({}))}\n\n"
             f"You can ask:\n"
             f"- *'What is the current year profit of {comp}?'*\n"
             f"- *'Will {comp} price increase in the next few days?'*\n"
@@ -1054,7 +1232,8 @@ tabs_list = [
     ("📊 Market Watch", "watch"),
     ("💬 Stock Chatbot", "chat"),
     ("🚀 IPO Hub", "ipo"),
-    ("🔍 Deep Dive", "dive")
+    ("🔍 Deep Dive", "dive"),
+    ("📒 Virtual Portfolio", "portfolio"),
 ]
 
 nav_html = "".join([
@@ -1087,8 +1266,8 @@ if active_tab == "📊 Market Watch":
         time_str = current_time_ist.strftime("%I:%M:%S %p IST")
 
         if is_open:
-            st.subheader("🟢 Today's Live Market Movers (Market Open)")
-            st.caption(f"🔄 Auto-updating every 20s | Clock: **{time_str}**")
+            st.subheader("🟢 Today's Market Movers (Market Open)")
+            st.caption(f"🔄 Refreshing every 20s; prices use Yahoo Finance's latest daily bar | Clock: **{time_str}**")
         else:
             header_col, btn_col = st.columns([3, 1.2])
             with header_col:
@@ -1122,46 +1301,107 @@ if active_tab == "📊 Market Watch":
             if is_open:
                 all_picks.append({
                     "Stock": top_g1, "Horizon": "Intraday Momentum", "Action": "BUY ON DIP",
+                    "Price": float(gainers_df.iloc[0]["Latest Price (₹)"]),
+                    "Target %": 6, "Stop %": 3,
                     "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-                    "Why": "Strong morning participation and volume expansion. Ride trend toward VWAP pullbacks."
+                    "Why": "Strong recent price momentum; daily data does not confirm intraday volume or VWAP."
                 })
 
             all_picks.extend([
-                {"Stock": top_g2, "Horizon": "Short-Term Swing (1–4 Wks)", "Action": "BUY (Breakout)", "Origin": f"Top Gainer (+{gainers_df.iloc[1]['% Change']}%)", "Why": "Clean breakout clearing immediate resistance levels with supportive volume."},
-                {"Stock": top_l1, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Mean Reversion)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']}%)", "Why": "Selling exhaustion near dynamic lower support bands. Favorable risk-reward for bounce."},
-                {"Stock": top_l2, "Horizon": "Long-Term Value (6–12 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']}%)", "Why": "Market drawdown on solid balance sheet, offering attractive valuation safety."},
-                {"Stock": top_l3, "Horizon": "Long-Term Core (12–24 Mos)", "Action": "BUY (Compounder)", "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']}%)", "Why": "Macro pullback on fundamentally sound asset with strong capital return ratios."}
+                {"Stock": top_g2, "Price": float(gainers_df.iloc[1]["Latest Price (₹)"]), "Target %": 8, "Stop %": 4, "Horizon": "Short-Term Swing (1–4 Wks)", "Action": "BUY (Momentum)", "Origin": f"Top Gainer ({gainers_df.iloc[1]['% Change']:+.2f}%)", "Why": "Recent price momentum; this screen does not validate volume or resistance breakouts."},
+                {"Stock": top_l1, "Price": float(losers_df.iloc[0]["Latest Price (₹)"]), "Target %": 5, "Stop %": 4, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Watch for Reversal)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']:.2f}%)", "Why": "Price has declined; a decline alone does not confirm selling exhaustion or a reversal."},
+                {"Stock": top_l2, "Price": float(losers_df.iloc[1]["Latest Price (₹)"]), "Target %": 12, "Stop %": 8, "Horizon": "Long-Term Value (6–12 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']:.2f}%)", "Why": "Price weakness; fundamentals are checked below before any BUY call is recorded."},
+                {"Stock": top_l3, "Price": float(losers_df.iloc[2]["Latest Price (₹)"]), "Target %": 20, "Stop %": 12, "Horizon": "Long-Term Core (12–24 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']:.2f}%)", "Why": "Price weakness; fundamentals are checked below before any BUY call is recorded."}
             ])
 
+            buy_calls = []
             p_cols = st.columns(len(all_picks))
             for idx, p in enumerate(all_picks):
+                fundamentals = get_fundamental_snapshot(f"{p['Stock']}.NS")
+                entry_price = p["Price"]
+                target_price = round(entry_price * (1 + p["Target %"] / 100), 2)
+                stop_loss = round(entry_price * (1 - p["Stop %"] / 100), 2)
+                eligible = fundamentals["buy_eligible"]
+                if eligible:
+                    buy_calls.append(
+                        make_buy_call(
+                            f"{p['Stock']}.NS",
+                            p["Stock"],
+                            "Market Watch",
+                            p["Horizon"],
+                            entry_price,
+                            target_price,
+                            stop_loss,
+                            fundamentals,
+                            quote_as_of=last_date or None,
+                        )
+                    )
                 with p_cols[idx]:
                     with st.container(border=True):
                         st.markdown(f"### {p['Stock']}")
                         st.caption(p["Origin"])
-                        st.success(f"**{p['Action']}**")
+                        if eligible:
+                            st.success(f"**{p['Action']}**")
+                        else:
+                            st.warning("**HOLD — BUY blocked by fundamentals**")
                         st.markdown(f"**Horizon:** {p['Horizon']}")
                         st.markdown(f"**Why?** {p['Why']}")
+                        st.markdown(f"**Entry snapshot:** ₹{entry_price:,.2f}")
+                        st.markdown(f"**Target / Stop:** ₹{target_price:,.2f} / ₹{stop_loss:,.2f}")
+                        st.caption(format_fundamental_assessment(fundamentals))
+                        if eligible:
+                            st.caption(f"Paper trade: ₹{VIRTUAL_INVESTMENT:,.0f} virtual allocation")
+            register_buy_calls(buy_calls)
+        else:
+            st.info("Not enough daily price history is available to produce market-mover calls.")
 
         st.markdown("---")
         g_col, l_col = st.columns(2)
         with g_col:
             st.markdown("##### 🟢 Top Gainers")
             if not gainers_df.empty:
-                st.dataframe(gainers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "+{:.2f}", "% Change": "+{:.2f}%"}), use_container_width=True, hide_index=True)
+                st.dataframe(gainers_df.style.format({"Latest Price (₹)": "₹{:.2f}", "Change (₹)": "+{:.2f}", "% Change": "+{:.2f}%"}), use_container_width=True, hide_index=True)
         with l_col:
             st.markdown("##### 🔴 Top Losers")
             if not losers_df.empty:
-                st.dataframe(losers_df.style.format({"Live Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
+                st.dataframe(losers_df.style.format({"Latest Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.subheader("🛡️ Top 3 Value Picks (52W Low Support + Bullish Technical Confirmation)")
-        st.caption("Candidates must have a solid balance sheet near 52-week support AND technical indicators (RSI + 20 EMA / MACD) explicitly in favor of a BUY.")
+        st.caption("Candidates must be near 52-week support, pass the RSI/EMA/MACD screen, and pass the available-fundamentals check.")
 
         low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
         if not low_screener_df.empty:
             cols = st.columns(len(low_screener_df))
+            value_buy_calls = []
             for i, (_, row) in enumerate(low_screener_df.iterrows()):
+                fundamentals = get_fundamental_snapshot(f"{row['Stock']}.NS")
+                value_buy_calls.extend(
+                    [
+                        make_buy_call(
+                            f"{row['Stock']}.NS",
+                            row["Stock"],
+                            "52-week value screen",
+                            "Short-term (1–4 weeks)",
+                            float(row["Price"]),
+                            float(row["Short Target"]),
+                            float(row["Short SL"]),
+                            fundamentals,
+                            quote_as_of=last_date or None,
+                        ),
+                        make_buy_call(
+                            f"{row['Stock']}.NS",
+                            row["Stock"],
+                            "52-week value screen",
+                            "Long-term (6–18 months)",
+                            float(row["Price"]),
+                            float(row["Long Target"]),
+                            float(row["Long SL"]),
+                            fundamentals,
+                            quote_as_of=last_date or None,
+                        ),
+                    ]
+                )
                 with cols[i]:
                     with st.container(border=True):
                         st.markdown(f"### 💎 {row['Stock']}")
@@ -1169,6 +1409,7 @@ if active_tab == "📊 Market Watch":
                         st.write(f"**52W Low:** ₹{row['52W Low']} | **52W High:** ₹{row['52W High']}")
                         st.success(f"**{row['Technical Verdict']}**")
                         st.caption(f"⚡ **Setup:** {row['Technical Setup']}")
+                        st.caption(format_fundamental_assessment(fundamentals))
                         st.markdown("---")
                         st.markdown("**⚡ Short-Term (1–4 Wks):**")
                         st.write(f"- **Buy Range:** ₹{row['Price']}")
@@ -1177,6 +1418,7 @@ if active_tab == "📊 Market Watch":
                         st.markdown("**🏛️ Long-Term (6–18 Mos):**")
                         st.write(f"- **Stop-Loss:** ₹{row['Long SL']}")
                         st.write(f"- **Target:** ₹{row['Long Target']}")
+            register_buy_calls(value_buy_calls)
         else:
             st.info("No candidates currently fulfill both the 52-week support threshold AND the bullish technical buy criteria.")
 
@@ -1229,87 +1471,148 @@ elif active_tab == "💬 Stock Chatbot":
         st.rerun()
 
 # ==============================================================================
-# TAB 3: LIVE IPOs & GMP TRACKER (DYNAMIC 20s REFRESH + EXPIRATION FILTER)
+# TAB 3: LIVE IPOs & GMP TRACKER
 # ==============================================================================
 elif active_tab == "🚀 IPO Hub":
-    @st.fragment(run_every=20)
+    @st.fragment(run_every=60)
     def render_live_ipo_dashboard():
-        now_time = datetime.now(IST).strftime("%I:%M:%S %p IST")
-
         h_col1, h_col2 = st.columns([3, 1])
         with h_col1:
-            st.subheader("🔥 Live IPO & GMP Tracker (Auto-updating every 20s)")
-            st.caption(f"🟢 **Live Pulse:** Last refreshed at **{now_time}** | Auto-polling grey market movements every 20s")
+            st.subheader("Upcoming and ongoing IPOs")
+            st.caption(
+                "Issue schedules and issuer financials are checked against public IPO records. "
+                "GMP is an unofficial grey-market estimate, not a traded exchange price. "
+                "Applications closing today are removed after 5 PM IST."
+            )
         with h_col2:
-            if st.button("🔄 Force Sync Now", use_container_width=True):
+            if st.button("Refresh IPO data", icon=":material/refresh:", use_container_width=True):
                 fetch_live_ipo_gmp.clear()
                 st.rerun()
 
-        ipo_df = fetch_live_ipo_gmp()
+        try:
+            ipo_df, ipo_message = fetch_live_ipo_gmp()
+        except requests.RequestException as exc:
+            st.error(f"Could not load live IPO data: {exc}")
+            return
+        except (ValueError, KeyError) as exc:
+            st.error(f"The live IPO feed could not be parsed: {exc}")
+            return
+
+        if not ipo_df.empty:
+            now_ist = datetime.now(IST)
+            ipo_df = ipo_df[
+                ipo_df["Close Date"].apply(
+                    lambda close_date: is_ipo_application_open(close_date, now_ist)
+                )
+            ].copy()
+
+        if ipo_message and not ipo_df.empty:
+            st.warning(ipo_message)
+
         if not ipo_df.empty:
             f1, f2, f3 = st.columns([1.5, 1.5, 2])
             with f1:
                 status_filter = st.selectbox(
-                    "Status Filter:",
-                    ["All Active & Upcoming", "Ongoing (Closing Today)", "Ongoing (Open)", "Upcoming"],
+                    "Issue status",
+                    ["All open and upcoming", "Ongoing (Closing Today)", "Ongoing (Open)", "Upcoming"],
                     key="ipo_status_flt"
                 )
             with f2:
-                cat_filter = st.radio(
-                    "Category:",
+                cat_filter = st.selectbox(
+                    "Issue category",
                     ["All", "Mainboard", "SME"],
-                    horizontal=True,
                     key="ipo_cat_flt"
                 )
             with f3:
                 rec_filter = st.selectbox(
-                    "Signal Filter:",
-                    ["All Signals", "STRONG APPLY", "APPLY (Listing Gain)", "NEUTRAL / CAUTION", "AVOID"],
-                    key="ipo_rec_flt"
+                    "Screening call",
+                    ["All calls", "APPLY", "AVOID"],
+                    key="ipo_rec_flt_v3"
                 )
 
             filtered = ipo_df.copy()
-            if status_filter != "All Active & Upcoming":
+            if status_filter != "All open and upcoming":
                 filtered = filtered[filtered["Status"] == status_filter]
             if cat_filter != "All":
                 filtered = filtered[filtered["Type"] == cat_filter]
-            if rec_filter != "All Signals":
+            if rec_filter != "All calls":
                 filtered = filtered[filtered["Recommendation"] == rec_filter]
 
             if not filtered.empty:
+                status_order = {"Ongoing (Closing Today)": 0, "Ongoing (Open)": 1, "Upcoming": 2}
+                filtered["_status_order"] = filtered["Status"].map(status_order)
+                filtered = filtered.sort_values(
+                    ["_status_order", "Close Date", "Company"],
+                    ascending=[True, True, True],
+                )
+                fetched_at = filtered["Page Fetched At"].iloc[0]
+                st.caption(
+                    f"Last fetched: **{fetched_at}** | Automatic refresh: every 5 minutes. "
+                    "A source may update its GMP less frequently."
+                )
                 for _, row in filtered.iterrows():
                     with st.container(border=True):
-                        h1, h2, h3 = st.columns([3, 2, 2])
+                        h1, h2, h3 = st.columns([2.5, 1.5, 2])
                         with h1:
                             st.markdown(f"### {row['Company']}")
-                            status_badge = "🔴 CLOSING TODAY" if "Closing Today" in row['Status'] else ("🟢 OPEN" if "Open" in row['Status'] else "⏳ UPCOMING")
-                            st.caption(f"Status: **{status_badge}** | Category: **{row['Type']}** | Lot: **{row['Lot Size']}**")
+                            close_date = row["Close Date"].strftime("%d %b %Y")
+                            open_date = row["Open Date"].strftime("%d %b %Y")
+                            st.caption(
+                                f"**{row['Status']}** · {row['Type']} · "
+                                f"Opens {open_date} · Closes {close_date}"
+                            )
                         with h2:
+                            gmp = row["GMP (₹)"]
+                            gain = row["Est Gain %"]
                             st.metric(
-                                label="Live GMP",
-                                value=f"₹{row['GMP (₹)']}",
-                                delta=f"+{row['Est Gain %']}%" if row['Est Gain %'] > 0 else "Flat / Discount"
+                                "Latest GMP (unofficial)",
+                                f"₹{gmp:,.2f}" if pd.notna(gmp) else "Unavailable",
+                                delta=f"Estimated gain {gain:.2f}%" if pd.notna(gain) else None,
                             )
                         with h3:
-                            rec = row["Recommendation"]
-                            if "STRONG" in rec: st.success(f"### {rec}")
-                            elif "APPLY" in rec: st.info(f"### {rec}")
-                            elif "NEUTRAL" in rec: st.warning(f"### {rec}")
-                            else: st.error(f"### {rec}")
+                            if row["Recommendation"] == "APPLY":
+                                st.success("### APPLY")
+                            else:
+                                st.error("### AVOID")
+                            st.caption(row["Analysis & Rationale"])
 
-                        d1, d2 = st.columns([2.5, 4.5])
+                        d1, d2 = st.columns([1, 2])
                         with d1:
-                            st.write(f"**Issue Price:** ₹{row['Issue Price (₹)']}")
-                            st.write(f"📅 **Issue Open:** `{row['Open Date']}`")
-                            st.write(f"📅 **Issue Close:** `{row['Close Date']}`")
-                            if row["Subscription"] != "-":
-                                st.write(f"**Subscription:** {row['Subscription']}")
+                            issue_price = row["Issue Price (₹)"]
+                            st.write(
+                                "**Price band:** "
+                                f"{row['Price Band'] if row['Price Band'] != 'Not reported' else (f'₹{issue_price:,.2f}' if pd.notna(issue_price) else 'Not reported')}"
+                            )
+                            st.write(f"**Lot size:** {row['Lot Size']}")
+                            st.write(f"**Issue size:** {row['Issue Size']}")
                         with d2:
-                            st.markdown(f"**Why this call?** {row['Analysis & Rationale']}")
+                            st.write(f"**Fundamentals:** {row['Fundamental Summary']}")
+                            if row["Fundamental Source Status"] != "Issuer financial tables loaded":
+                                st.caption(f"Data note: {row['Fundamental Source Status']}")
+                            link1, link2 = st.columns(2)
+                            with link1:
+                                st.link_button(
+                                    "Issuer financials and offer details",
+                                    row["Fundamental Source URL"],
+                                    use_container_width=True,
+                                )
+                            with link2:
+                                st.link_button(
+                                    "GMP source",
+                                    row["GMP Source URL"],
+                                    use_container_width=True,
+                                )
             else:
-                st.info("No active IPOs match the selected filter combination.")
+                st.info("No open or upcoming IPOs match the selected filters.")
+            st.caption(
+                "Rule-based screening only: APPLY requires positive latest reported annual revenue and profit, "
+                "at least two passing reported profitability/leverage checks, and an indicative GMP gain of "
+                "at least 10%, with no major financial red flags or sharp annual declines. "
+                "Missing or weak evidence results in AVOID. This is educational screening, not "
+                "personalized investment advice; verify the RHP and your own risk tolerance before applying."
+            )
         else:
-            st.info("Gathering live IPO grey market figures...")
+            st.info(ipo_message or "There are no upcoming or ongoing IPOs with an application window still open.")
 
     render_live_ipo_dashboard()
 
@@ -1370,8 +1673,9 @@ elif active_tab == "🔍 Deep Dive":
                     prev_close = float(hist["Close"].iloc[-2]) if len(hist) >= 2 else live_price
 
                     day_change = live_price - prev_close
-                    day_pct = (day_change / prev_close) * 100
+                    day_pct = (day_change / prev_close) * 100 if prev_close else 0.0
                     info = stock.info or {}
+                    fundamentals = assess_fundamentals(info)
 
                     hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
                     hist["SMA_50"] = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator()
@@ -1383,7 +1687,7 @@ elif active_tab == "🔍 Deep Dive":
                     latest = hist.iloc[-1]
                     rsi = float(latest["RSI"]) if pd.notna(latest["RSI"]) else 50.0
                     sma_50 = float(latest["SMA_50"]) if pd.notna(latest["SMA_50"]) else live_price
-                    sma_200 = float(latest["SMA_200"]) if pd.notna(latest["SMA_200"]) else live_price
+                    sma_200 = float(latest["SMA_200"]) if pd.notna(latest["SMA_200"]) else None
 
                     sentiment_score, news_items = fetch_cloud_safe_news(stock, clean_ticker)
 
@@ -1435,40 +1739,73 @@ elif active_tab == "🔍 Deep Dive":
                         lt_score -= 1
                         lt_reasons.append(f"Subdued capital efficiency: ROE ({roe*100:.1f}%).")
 
-                    if debt_equity is not None:
+                    if debt_equity is not None and not fundamentals["is_financial_company"]:
                         if debt_equity < 100:
                             lt_score += 1
                             lt_reasons.append("Conservative leverage: Debt-to-Equity is low (< 1.0).")
                         else:
                             lt_score -= 1
                             lt_reasons.append("Elevated debt leverage on balance sheet.")
+                    elif fundamentals["is_financial_company"]:
+                        lt_reasons.append("Debt-to-equity is not used for financial-sector companies.")
 
-                    if sma_200:
+                    if sma_200 is not None:
                         if live_price > sma_200:
                             lt_score += 1
                             lt_reasons.append(f"Structural uptrend: Price holds above 200-day SMA (₹{sma_200:.2f}).")
                         else:
                             lt_score -= 1
                             lt_reasons.append(f"Macro downtrend: Price trades below 200-day SMA (₹{sma_200:.2f}).")
+                    else:
+                        lt_reasons.append("200-day SMA unavailable; price trend was not scored.")
 
                     lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
+                    if st_call == "BUY" and not fundamentals["buy_eligible"]:
+                        st_call = "HOLD"
+                        st_reasons.append(
+                            f"BUY blocked: fundamentals {fundamentals['status'].lower()} — {fundamentals['summary']}."
+                        )
+                    if lt_call == "BUY" and not fundamentals["buy_eligible"]:
+                        lt_call = "HOLD"
+                        lt_reasons.append(
+                            f"BUY blocked: fundamentals {fundamentals['status'].lower()} — {fundamentals['summary']}."
+                        )
 
                     st.markdown("---")
                     display_name = info.get("longName") or info.get("shortName") or ticker_symbol
                     st.subheader(f"{display_name} (`{ticker_symbol}`)")
+                    st.caption(format_fundamental_assessment(fundamentals))
                     st.metric(
-                        label="Live Traded Price (LTP)",
+                        label="Latest available price snapshot",
                         value=f"₹{live_price:,.2f}",
                         delta=f"{day_change:+,.2f} ({day_pct:+.2f}%)"
                     )
 
                     r1, r2 = st.columns(2)
+                    deep_dive_buy_calls = []
                     with r1:
                         st.markdown("#### ⚡ Short-Term Call")
                         if st_call == "BUY": st.success("### ACTION: BUY")
                         elif st_call == "SELL": st.error("### ACTION: SELL")
                         else: st.warning("### ACTION: HOLD")
                         for r in st_reasons: st.write(f"- {r}")
+                        if st_call == "BUY":
+                            short_target = round(live_price * 1.08, 2)
+                            short_stop = round(live_price * 0.95, 2)
+                            st.write(f"- **Target:** ₹{short_target:,.2f} | **Stop-loss:** ₹{short_stop:,.2f}")
+                            deep_dive_buy_calls.append(
+                                make_buy_call(
+                                    ticker_symbol,
+                                    display_name,
+                                    "Deep Dive",
+                                    "Short-term",
+                                    live_price,
+                                    short_target,
+                                    short_stop,
+                                    fundamentals,
+                                    quote_as_of=hist.index[-1].strftime("%d %b %Y"),
+                                )
+                            )
 
                     with r2:
                         st.markdown("#### 🏛️ Long-Term Call")
@@ -1476,6 +1813,24 @@ elif active_tab == "🔍 Deep Dive":
                         elif lt_call == "SELL": st.error("### ACTION: SELL")
                         else: st.warning("### ACTION: HOLD")
                         for r in lt_reasons: st.write(f"- {r}")
+                        if lt_call == "BUY":
+                            long_target = round(live_price * 1.25, 2)
+                            long_stop = round(live_price * 0.90, 2)
+                            st.write(f"- **Target:** ₹{long_target:,.2f} | **Stop-loss:** ₹{long_stop:,.2f}")
+                            deep_dive_buy_calls.append(
+                                make_buy_call(
+                                    ticker_symbol,
+                                    display_name,
+                                    "Deep Dive",
+                                    "Long-term",
+                                    live_price,
+                                    long_target,
+                                    long_stop,
+                                    fundamentals,
+                                    quote_as_of=hist.index[-1].strftime("%d %b %Y"),
+                                )
+                            )
+                    register_buy_calls(deep_dive_buy_calls)
 
                     st.markdown("---")
                     st.markdown("#### 📰 Scanned Headlines")
@@ -1483,11 +1838,110 @@ elif active_tab == "🔍 Deep Dive":
                         for n in news_items:
                             badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
                             st.markdown(f"**[{badge}]** [{n['title']}]({n['link']})")
-                        else:
-                            st.info("No recent news headlines available for this symbol.")
+                    else:
+                        st.info("No recent news headlines available for this symbol.")
 
                 except Exception as e:
                     st.error(f"Error analyzing ticker: {e}")
+
+# ==============================================================================
+# TAB 5: VIRTUAL BUY-CALL TRACKER
+# ==============================================================================
+elif active_tab == "📒 Virtual Portfolio":
+    st.subheader("📒 Virtual BUY-call portfolio")
+    st.caption(
+        f"Every eligible BUY call is simulated with ₹{VIRTUAL_INVESTMENT:,.0f}. "
+        "P&L and win rate use the latest available daily price, not intraday target/stop history."
+    )
+    bin_id = get_private_setting("JSONBIN_BIN_ID")
+    master_key = get_private_setting("JSONBIN_MASTER_KEY")
+    if not bin_id or not master_key:
+        st.info("Configure JSONBIN_BIN_ID and JSONBIN_MASTER_KEY to view the shared portfolio.")
+    else:
+        refresh_col, _ = st.columns([1, 4])
+        with refresh_col:
+            if st.button("🔄 Refresh portfolio"):
+                get_latest_trade_prices.clear()
+        try:
+            trades = fetch_virtual_trades(bin_id, master_key)
+        except (requests.RequestException, ValueError, KeyError) as exc:
+            st.error(f"Could not load the JSONBin portfolio: {exc}")
+            trades = []
+            prices = {}
+        else:
+            tickers = tuple(sorted({trade["ticker"] for trade in trades if trade.get("ticker")}))
+            try:
+                prices = get_latest_trade_prices(tickers)
+            except Exception as exc:
+                st.error(f"Could not retrieve latest stock prices: {exc}")
+                prices = {}
+
+        if trades:
+            portfolio_rows = []
+            total_invested = 0.0
+            total_current_value = 0.0
+            profitable_trades = 0
+            priced_trades = 0
+            for trade in trades:
+                ticker = trade.get("ticker", "")
+                entry_price = float(trade.get("entry_price") or 0)
+                investment = float(trade.get("virtual_investment") or VIRTUAL_INVESTMENT)
+                quantity = float(trade.get("quantity") or 0)
+                current_price = prices.get(ticker)
+                current_value = current_price * quantity if current_price is not None else None
+                pnl = current_value - investment if current_value is not None else None
+                if pnl is not None:
+                    priced_trades += 1
+                    total_invested += investment
+                    total_current_value += current_value
+                    profitable_trades += pnl > 0
+                status = (
+                    "Price unavailable"
+                    if current_price is None
+                    else "At/above target"
+                    if current_price >= float(trade["target_price"])
+                    else "At/below stop"
+                    if current_price <= float(trade["stop_loss"])
+                    else "Open"
+                )
+                portfolio_rows.append(
+                    {
+                        "Call time (IST)": trade.get("called_at", ""),
+                        "Quote date": trade.get("quote_as_of", ""),
+                        "Stock": trade.get("company", ticker),
+                        "Source": trade.get("source", ""),
+                        "Horizon": trade.get("horizon", ""),
+                        "Entry (₹)": entry_price,
+                        "Target (₹)": float(trade["target_price"]),
+                        "Stop-loss (₹)": float(trade["stop_loss"]),
+                        "Latest (₹)": current_price,
+                        "Virtual amount (₹)": investment,
+                        "P&L (₹)": pnl,
+                        "Status": status,
+                        "Fundamentals": trade.get("fundamental_status", "Unknown"),
+                    }
+                )
+
+            if priced_trades:
+                metric_cols = st.columns(3)
+                metric_cols[0].metric("Virtual amount priced", f"₹{total_invested:,.2f}")
+                metric_cols[1].metric(
+                    "Latest virtual value",
+                    f"₹{total_current_value:,.2f}",
+                    delta=f"₹{total_current_value - total_invested:,.2f}",
+                )
+                metric_cols[2].metric(
+                    "Currently profitable",
+                    f"{profitable_trades}/{priced_trades}",
+                    delta=f"{profitable_trades / priced_trades:.0%} mark-to-market win rate",
+                )
+            st.dataframe(
+                pd.DataFrame(portfolio_rows),
+                width="stretch",
+                hide_index=True,
+            )
+        else:
+            st.info("No virtual BUY calls have been saved to this JSONBin yet.")
 
 # --- MANDATORY REGULATORY & EDUCATIONAL DISCLAIMER ---
 st.markdown("---")
