@@ -6,6 +6,7 @@ from stock_features import (
     assess_fundamentals,
     build_virtual_trade,
     evaluate_ipo_recommendation,
+    evaluate_stock_signal,
     is_active_today_or_future,
     match_ipo_gmp,
     parse_ipo_html,
@@ -300,6 +301,85 @@ class VirtualTradeTests(unittest.TestCase):
         http.get.return_value = response
         with self.assertRaisesRegex(ValueError, "trades"):
             sync_virtual_trades([self.call], "bin-id", "master-key", http=http)
+
+
+class StockSignalTests(unittest.TestCase):
+    def setUp(self):
+        self.indicators = {
+            "price": 120.0,
+            "sma_50": 110.0,
+            "sma_200": 100.0,
+            "rsi": 60.0,
+            "macd_bullish": True,
+            "macd_bearish": False,
+            "recent_bullish_cross": True,
+            "volume_ratio": 1.5,
+            "breakout": True,
+            "atr": 5.0,
+        }
+        self.fundamentals = {"buy_eligible": True, "status": "Pass"}
+
+    def test_confirmed_swing_buy_uses_atr_levels(self):
+        result = evaluate_stock_signal(self.indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "BUY")
+        self.assertEqual(result["long_term_action"], "BUY")
+        self.assertEqual(result["swing_entry"], 120.0)
+        self.assertEqual(result["swing_stop"], 110.0)
+        self.assertEqual(result["swing_target"], 135.0)
+        self.assertEqual(result["long_stop"], 105.0)
+        self.assertEqual(result["long_target"], 150.0)
+        self.assertEqual(result["risk_reward"], 1.5)
+
+    def test_long_term_buy_does_not_require_swing_breakout_or_volume(self):
+        indicators = self.indicators | {
+            "breakout": False,
+            "volume_ratio": 0.8,
+            "recent_bullish_cross": False,
+        }
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["long_term_action"], "BUY")
+        self.assertEqual(result["swing_action"], "WATCH")
+
+    def test_missing_long_history_never_generates_buy(self):
+        indicators = self.indicators | {"sma_200": None}
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "WATCH")
+        self.assertEqual(result["long_term_action"], "HOLD / WATCH")
+        self.assertEqual(result["swing_target"], 135.0)
+
+    def test_extreme_atr_cannot_create_buy_with_invalid_stop_levels(self):
+        indicators = self.indicators | {"atr": 50.0}
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "WATCH")
+        self.assertEqual(result["long_term_action"], "HOLD / WATCH")
+        self.assertIsNone(result["swing_stop"])
+        self.assertIsNone(result["long_stop"])
+
+    def test_exit_requires_downtrend_bearish_momentum_and_failed_fundamentals(self):
+        indicators = self.indicators | {
+            "price": 80.0,
+            "sma_50": 90.0,
+            "sma_200": 100.0,
+            "macd_bullish": False,
+            "macd_bearish": True,
+            "recent_bullish_cross": False,
+        }
+        fundamentals = {"buy_eligible": False, "status": "Fail"}
+        result = evaluate_stock_signal(indicators, fundamentals)
+        self.assertEqual(result["swing_action"], "EXIT / AVOID")
+        self.assertTrue(result["exit_signal"])
+
+    def test_failed_fundamentals_block_buys_and_incomplete_numbers_are_safe(self):
+        failed = evaluate_stock_signal(
+            self.indicators,
+            {"buy_eligible": False, "status": "Fail"},
+        )
+        self.assertEqual(failed["swing_action"], "WATCH")
+        self.assertEqual(failed["long_term_action"], "HOLD / WATCH")
+
+        invalid = self.indicators | {"price": "not a price"}
+        result = evaluate_stock_signal(invalid, self.fundamentals)
+        self.assertEqual(result["swing_action"], "WATCH")
 
 
 if __name__ == "__main__":

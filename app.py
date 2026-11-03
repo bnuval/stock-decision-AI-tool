@@ -20,6 +20,7 @@ from stock_features import (
     build_virtual_trade,
     fetch_virtual_trades,
     evaluate_ipo_recommendation,
+    evaluate_stock_signal,
     is_ipo_application_open,
     is_active_today_or_future as ipo_is_active,
     match_ipo_gmp,
@@ -61,7 +62,7 @@ if "nav" in query_params and query_params["nav"] in ["watch", "chat", "ipo", "di
     }
     st.session_state.current_tab = nav_map[query_params["nav"]]
 
-# --- CSS: FIXED HEADER + PERSISTENT TABS ROW ---
+# --- APP THEME AND RESPONSIVE NAVIGATION ---
 st.markdown("""
 <style>
     header[data-testid="stHeader"] {
@@ -70,32 +71,51 @@ st.markdown("""
     }
 
     .block-container {
-        padding-top: 6.8rem !important;
-        padding-left: 0.8rem !important;
-        padding-right: 0.8rem !important;
-        padding-bottom: 4rem !important;
+        max-width: 1440px !important;
+        padding: 8.6rem 2rem 4rem !important;
+        margin: 0 auto !important;
     }
 
     .pinned-master-bar {
         position: fixed !important;
-        top: 0px !important;
-        left: 0px !important;
+        top: 0 !important;
+        left: 0 !important;
         width: 100vw !important;
-        height: 6.2rem !important;
-        background-color: #0e1117 !important;
-        z-index: 999999 !important;
+        min-height: 7.4rem !important;
+        background: linear-gradient(112deg, #10243b 0%, #173754 68%, #164f59 100%) !important;
+        z-index: 1000 !important;
         display: flex !important;
         flex-direction: column !important;
-        justify-content: flex-start !important;
-        padding: 0.4rem 1rem 0 1rem !important;
-        border-bottom: 2px solid #262c38 !important;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6) !important;
+        justify-content: center !important;
+        gap: 0.65rem !important;
+        padding: 0.75rem max(1.25rem, calc((100vw - 1360px) / 2)) 0.65rem !important;
+        border-bottom: 3px solid #2bb7a5 !important;
+        box-shadow: 0 8px 26px rgba(16, 36, 59, 0.14) !important;
+    }
+
+    .brand-row {
+        display: flex !important;
+        align-items: center !important;
+        gap: 0.75rem !important;
+        min-width: 0 !important;
+    }
+
+    .brand-mark {
+        width: 2.45rem !important;
+        height: 2.45rem !important;
+        display: grid !important;
+        place-items: center !important;
+        flex: 0 0 auto !important;
+        border: 1px solid rgba(255, 255, 255, 0.18) !important;
+        border-radius: 0.8rem !important;
+        background: rgba(255, 255, 255, 0.11) !important;
+        font-size: 1.2rem !important;
     }
 
     .pinned-master-bar h2 {
-        font-size: 1.15rem !important;
+        font-size: 1.18rem !important;
         font-weight: 700 !important;
-        color: #f0f2f6 !important;
+        color: #ffffff !important;
         margin: 0 !important;
         padding: 0 !important;
         line-height: 1.2 !important;
@@ -104,23 +124,41 @@ st.markdown("""
         text-overflow: ellipsis !important;
     }
 
+    .pinned-master-bar .brand-copy h2 {
+        color: #ffffff !important;
+    }
+
     .pinned-master-bar p {
         font-size: 0.72rem !important;
-        color: #9aa0a6 !important;
-        margin: 0.1rem 0 0.35rem 0 !important;
+        color: #c3d3df !important;
+        margin: 0.18rem 0 0 !important;
         padding: 0 !important;
         white-space: nowrap !important;
         overflow: hidden !important;
         text-overflow: ellipsis !important;
     }
 
+    .brand-meta {
+        margin-left: auto !important;
+        color: #d3e2ea !important;
+        font-size: 0.76rem !important;
+        white-space: nowrap !important;
+    }
+
+    .brand-meta strong {
+        color: #ffffff !important;
+        font-size: 0.9rem !important;
+        margin-right: 0.2rem !important;
+    }
+
     .nav-tabs-wrapper {
         display: flex !important;
         flex-direction: row !important;
         flex-wrap: nowrap !important;
-        gap: 0.4rem !important;
+        gap: 0.45rem !important;
         overflow-x: auto !important;
         overflow-y: hidden !important;
+        padding-bottom: 0.05rem !important;
         -webkit-overflow-scrolling: touch !important;
         scrollbar-width: none !important;
     }
@@ -131,55 +169,126 @@ st.markdown("""
     .nav-tab-btn {
         display: inline-block !important;
         text-decoration: none !important;
-        background-color: #161a23 !important;
-        border: 1px solid #262c38 !important;
-        border-radius: 6px !important;
-        padding: 0.35rem 0.85rem !important;
-        font-size: 0.82rem !important;
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.16) !important;
+        border-radius: 0.55rem !important;
+        padding: 0.38rem 0.78rem !important;
+        font-size: 0.78rem !important;
         font-weight: 500 !important;
-        color: #c9d1d9 !important;
+        color: #e2edf3 !important;
         white-space: nowrap !important;
-        transition: all 0.15s ease-in-out !important;
+        transition: background-color 0.15s ease, border-color 0.15s ease !important;
     }
 
     .nav-tab-btn:hover {
-        border-color: #58a6ff !important;
+        background-color: rgba(255, 255, 255, 0.16) !important;
+        border-color: rgba(255, 255, 255, 0.38) !important;
         color: #ffffff !important;
     }
 
     .nav-tab-btn.active {
-        background-color: #1f6feb !important;
-        border-color: #58a6ff !important;
+        background-color: #14877f !important;
+        border-color: #55c5b7 !important;
         color: #ffffff !important;
         font-weight: 600 !important;
     }
 
+    .block-container h1,
+    .block-container h2,
+    .block-container h3 {
+        letter-spacing: -0.025em !important;
+        color: #18324b !important;
+    }
+
+    .block-container h3 {
+        font-size: 1.45rem !important;
+        margin-bottom: 0.25rem !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-radius: 0.9rem !important;
+        border-color: #e0e7ef !important;
+        box-shadow: 0 3px 14px rgba(25, 50, 75, 0.045) !important;
+    }
+
+    div[data-testid="stMetric"] {
+        border: 1px solid #e2e8ef !important;
+        border-radius: 0.8rem !important;
+        padding: 0.9rem 1rem !important;
+        background: #ffffff !important;
+    }
+
+    div[data-testid="stMetricLabel"] p {
+        color: #66788a !important;
+        font-size: 0.78rem !important;
+        font-weight: 600 !important;
+    }
+
+    div[data-testid="stMetricValue"] {
+        color: #18324b !important;
+        font-weight: 650 !important;
+    }
+
+    .stButton > button,
+    .stLinkButton > a {
+        border-radius: 0.65rem !important;
+        font-weight: 600 !important;
+        transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+    }
+
+    .stButton > button:hover,
+    .stLinkButton > a:hover {
+        transform: translateY(-1px) !important;
+        box-shadow: 0 4px 12px rgba(20, 135, 127, 0.14) !important;
+    }
+
+    div[data-testid="stDataFrame"] {
+        border: 1px solid #e0e7ef !important;
+        border-radius: 0.75rem !important;
+        overflow: hidden !important;
+    }
+
+    div[data-testid="stAlert"] {
+        border-radius: 0.75rem !important;
+    }
+
+    .app-disclaimer {
+        margin: 1.75rem 0 0 !important;
+        padding: 0.9rem 1rem !important;
+        border: 1px solid #f1d7a7 !important;
+        border-left: 4px solid #d99a2b !important;
+        border-radius: 0.7rem !important;
+        background: #fffaf0 !important;
+        color: #634b22 !important;
+        font-size: 0.84rem !important;
+    }
+
     @media (max-width: 768px) {
         .block-container {
-            padding-top: 5.8rem !important;
-            padding-left: 0.45rem !important;
-            padding-right: 0.45rem !important;
+            padding: 8.1rem 0.8rem 3rem !important;
         }
         .pinned-master-bar {
-            height: 5.4rem !important;
-            padding: 0.35rem 0.5rem 0 0.5rem !important;
+            min-height: 7.15rem !important;
+            gap: 0.55rem !important;
+            padding: 0.6rem 0.75rem 0.55rem !important;
         }
         .pinned-master-bar h2 {
-            font-size: 0.96rem !important;
+            font-size: 1.02rem !important;
         }
         .pinned-master-bar p {
-            font-size: 0.65rem !important;
-            margin-bottom: 0.25rem !important;
+            font-size: 0.66rem !important;
         }
+        .brand-mark {
+            width: 2.15rem !important;
+            height: 2.15rem !important;
+        }
+        .brand-meta { display: none !important; }
         .nav-tab-btn {
-            padding: 0.3rem 0.65rem !important;
-            font-size: 0.75rem !important;
+            padding: 0.34rem 0.62rem !important;
+            font-size: 0.73rem !important;
         }
-        .stMetric { padding: 4px !important; }
-        .stMetric label { font-size: 0.72rem !important; }
-        .stMetric div[data-testid="stMetricValue"] { font-size: 1.15rem !important; }
-        div[data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
-        div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
+        .block-container h3 { font-size: 1.25rem !important; }
+        div[data-testid="stMetric"] { padding: 0.7rem !important; }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -328,98 +437,152 @@ def get_live_market_data(universe):
     except Exception:
         return pd.DataFrame(), pd.DataFrame(), last_session_date
 
-# --- 5. TOP 3 PICKS: 52-WEEK LOW + TECHNICAL CONFLUENCE FILTER ---
+# --- 5. SHARED TECHNICAL SIGNALS AND CONFIRMED BUY SCREEN ---
+def calculate_stock_signal(history: pd.DataFrame, fundamentals: dict) -> dict:
+    indicators = {
+        "price": None,
+        "sma_50": None,
+        "sma_200": None,
+        "rsi": None,
+        "macd_bullish": None,
+        "macd_bearish": None,
+        "recent_bullish_cross": None,
+        "volume_ratio": None,
+        "breakout": None,
+        "atr": None,
+    }
+    if history.empty or not {"Close", "High", "Low", "Volume"}.issubset(history.columns):
+        return evaluate_stock_signal(indicators, fundamentals)
+
+    history = (
+        history[["Close", "High", "Low", "Volume"]]
+        .apply(pd.to_numeric, errors="coerce")
+        .dropna()
+    )
+    if history.empty:
+        return evaluate_stock_signal(indicators, fundamentals)
+    close = history["Close"].dropna()
+    if close.empty:
+        return evaluate_stock_signal(indicators, fundamentals)
+    high = history["High"].reindex(close.index)
+    low = history["Low"].reindex(close.index)
+    volume = history["Volume"].reindex(close.index)
+    indicators["price"] = float(close.iloc[-1])
+
+    if len(close) >= 50:
+        indicators["sma_50"] = float(close.rolling(50).mean().iloc[-1])
+    if len(close) >= 200:
+        indicators["sma_200"] = float(close.rolling(200).mean().iloc[-1])
+        indicators["rsi"] = float(ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1])
+        macd = ta.trend.MACD(close)
+        macd_line = macd.macd()
+        macd_signal = macd.macd_signal()
+        if pd.notna(macd_line.iloc[-1]) and pd.notna(macd_signal.iloc[-1]):
+            indicators["macd_bullish"] = bool(macd_line.iloc[-1] > macd_signal.iloc[-1])
+            indicators["macd_bearish"] = bool(macd_line.iloc[-1] < macd_signal.iloc[-1])
+            crosses = (macd_line > macd_signal) & (
+                macd_line.shift(1) <= macd_signal.shift(1)
+            )
+            indicators["recent_bullish_cross"] = bool(crosses.tail(5).any())
+        previous_volume = volume.iloc[-21:-1].mean()
+        if pd.notna(previous_volume) and previous_volume > 0 and pd.notna(volume.iloc[-1]):
+            indicators["volume_ratio"] = float(volume.iloc[-1] / previous_volume)
+        previous_high = high.iloc[-21:-1].max()
+        if len(high) >= 21 and pd.notna(previous_high):
+            indicators["breakout"] = bool(close.iloc[-1] > previous_high)
+        atr = ta.volatility.AverageTrueRange(
+            high=high,
+            low=low,
+            close=close,
+            window=14,
+        ).average_true_range()
+        if pd.notna(atr.iloc[-1]):
+            indicators["atr"] = float(atr.iloc[-1])
+
+    return evaluate_stock_signal(indicators, fundamentals)
+
+
+def extract_ticker_history(raw: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    if isinstance(raw.columns, pd.MultiIndex):
+        for level in range(raw.columns.nlevels):
+            if ticker in raw.columns.get_level_values(level):
+                history = raw.xs(ticker, axis=1, level=level)
+                if {"Close", "High", "Low", "Volume"}.issubset(history.columns):
+                    return history
+        return pd.DataFrame()
+    return raw if {"Close", "High", "Low", "Volume"}.issubset(raw.columns) else pd.DataFrame()
+
+
 @st.cache_data(ttl=300)
-def screen_52w_low_strong_picks(universe):
+def screen_confirmed_buy_picks(universe):
+    universe_symbols = set(universe)
     candidate_symbols = [
         "HINDUNILVR", "DABUR", "ITC", "IRCTC", "INFY", "TCS", "HDFCBANK",
         "KOTAKBANK", "ASIANPAINT", "MARUTI", "SUNPHARMA", "WIPRO", "TATAMOTORS",
         "RELIANCE", "LT", "ICICIBANK", "AXISBANK", "SBIN"
     ]
+    candidate_symbols = [symbol for symbol in candidate_symbols if symbol in universe_symbols]
+    if not candidate_symbols:
+        return pd.DataFrame()
     tickers = [f"{s}.NS" for s in candidate_symbols]
 
     try:
-        raw = yf.download(tickers, period="1y", interval="1d", progress=False)
+        raw = yf.download(
+            tickers,
+            period="2y",
+            interval="1d",
+            progress=False,
+            auto_adjust=True,
+            group_by="ticker",
+        )
         if raw.empty:
             return pd.DataFrame()
 
-        data = raw["Close"] if "Close" in raw else raw
         results = []
 
         for symbol in candidate_symbols:
             t = f"{symbol}.NS"
-            series = data[t].dropna() if t in data.columns else (data[symbol].dropna() if symbol in data.columns else None)
-            if series is not None and len(series) >= 60:
-                curr_price = float(series.iloc[-1])
-                low_52w = float(series.min())
-                high_52w = float(series.max())
+            history = extract_ticker_history(raw, t)
+            if len(history) < 200:
+                continue
+            technical_signal = calculate_stock_signal(
+                history,
+                {"buy_eligible": True, "status": "Pass"},
+            )
+            if technical_signal["swing_action"] != "BUY":
+                continue
+            fundamentals = get_fundamental_snapshot(t)
+            signal = calculate_stock_signal(history, fundamentals)
+            if signal["swing_action"] != "BUY":
+                continue
 
-                if low_52w <= 0:
-                    continue
-
-                dist_from_low = ((curr_price - low_52w) / low_52w) * 100
-
-                if dist_from_low > 18.0:
-                    continue
-
-                rsi_series = ta.momentum.RSIIndicator(series, window=14).rsi()
-                rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
-
-                ema_20_series = ta.trend.EMAIndicator(series, window=20).ema_indicator()
-                ema_20 = float(ema_20_series.iloc[-1]) if not ema_20_series.empty else curr_price
-
-                macd_obj = ta.trend.MACD(series)
-                macd_line = float(macd_obj.macd().iloc[-1])
-                macd_sig = float(macd_obj.macd_signal().iloc[-1])
-
-                rsi_ok = (30.0 <= rsi_val <= 65.0)
-                momentum_ok = (curr_price >= ema_20 * 0.985) or (macd_line >= macd_sig)
-
-                tech_score = 0
-                tech_notes = []
-
-                if rsi_ok:
-                    tech_score += 1
-                    tech_notes.append(f"RSI ({rsi_val:.1f}) in healthy reversal zone")
-                if curr_price >= ema_20:
-                    tech_score += 1
-                    tech_notes.append(f"Trading above 20-day EMA (₹{ema_20:.2f})")
-                if macd_line >= macd_sig:
-                    tech_score += 1
-                    tech_notes.append("MACD holds bullish crossover")
-
-                if tech_score >= 2 and momentum_ok:
-                    fundamentals = get_fundamental_snapshot(f"{symbol}.NS")
-                    if not fundamentals["buy_eligible"]:
-                        continue
-
-                    sl_short = round(low_52w * 0.98, 2)
-                    target_short = round(curr_price * 1.08, 2)
-                    sl_long = round(low_52w * 0.95, 2)
-                    target_long = round(curr_price * 1.25, 2)
-
-                    results.append({
-                        "Stock": symbol,
-                        "Price": round(curr_price, 2),
-                        "52W Low": round(low_52w, 2),
-                        "52W High": round(high_52w, 2),
-                        "Dist %": round(dist_from_low, 2),
-                        "RSI": round(rsi_val, 1),
-                        "Technical Setup": " • ".join(tech_notes),
-                        "Technical Verdict": "🟢 Bullish Reversal",
-                        "Fundamental Status": fundamentals["status"],
-                        "Fundamental Summary": fundamentals["summary"],
-                        "Short SL": sl_short,
-                        "Short Target": target_short,
-                        "Long SL": sl_long,
-                        "Long Target": target_long
-                    })
+            close = history["Close"].dropna()
+            recent = history.loc[close.index].tail(252)
+            current_price = float(close.iloc[-1])
+            low_52w = float(recent["Low"].min())
+            high_52w = float(recent["High"].max())
+            results.append({
+                "Stock": symbol,
+                "Price": current_price,
+                "52W Low": round(low_52w, 2),
+                "52W High": round(high_52w, 2),
+                "Dist %": round((current_price - low_52w) / low_52w * 100, 2),
+                "RSI": round(float(ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]), 1),
+                "Technical Setup": "Trend aligned; 20-session breakout, recent MACD cross, RSI and volume confirmed.",
+                "Technical Verdict": "🟢 Confirmed swing setup",
+                "Fundamental Status": fundamentals["status"],
+                "Fundamental Summary": fundamentals["summary"],
+                "Short SL": signal["swing_stop"],
+                "Short Target": signal["swing_target"],
+                "Long SL": signal["long_stop"],
+                "Long Target": signal["long_target"],
+            })
 
         if results:
-            df = pd.DataFrame(results).sort_values(by="Dist %", ascending=True)
+            df = pd.DataFrame(results).sort_values(by="RSI", ascending=True)
             return df.head(3).reset_index(drop=True)
-    except Exception:
-        pass
+    except Exception as exc:
+        st.warning(f"Could not complete the confirmed-signal scan: {exc}")
     return pd.DataFrame()
 
 # --- DATE PARSER FOR ROLLING EXPIRATION ---
@@ -784,7 +947,7 @@ def get_live_market_context_for_query(query: str):
         padded_query = f" {normalized} "
         pronoun_cues = [" IT ", " THIS ", " THAT ", " ITS ", " SAME ", " THE STOCK ", " THE SHARE ", " THE COMPANY ", " HOLD IT "]
         is_follow_up = any(cue in padded_query for cue in pronoun_cues) or (
-            any(w in normalized for w in ["BUY", "SELL", "HOLD", "SAFE", "TARGET", "PE", "PROFIT", "REVENUE", "HIKE", "FALL"]) 
+            any(w in normalized for w in ["BUY", "SELL", "HOLD", "SAFE", "TARGET", "PE", "PROFIT", "REVENUE", "HIKE", "FALL"])
             and len(tokens) <= 7
         )
         if is_follow_up:
@@ -801,6 +964,7 @@ def get_live_market_context_for_query(query: str):
         "quote_as_of": None,
         "rsi": None,
         "sma_50": None,
+        "technical_signal": None,
         "pe": None,
         "roe": None,
         "net_income_cr": None,
@@ -817,12 +981,12 @@ def get_live_market_context_for_query(query: str):
             stock = yf.Ticker(ticker_found)
             info = stock.info or {}
             context_dict["fundamentals"] = assess_fundamentals(info)
-            hist = stock.history(period="3mo")
+            hist = stock.history(period="2y")
 
             if hist.empty:
                 sme_sym = ticker_found.replace(".NS", "-SM.NS")
                 sme_stock = yf.Ticker(sme_sym)
-                sme_hist = sme_stock.history(period="3mo")
+                sme_hist = sme_stock.history(period="2y")
                 if not sme_hist.empty:
                     stock = sme_stock
                     hist = sme_hist
@@ -832,8 +996,12 @@ def get_live_market_context_for_query(query: str):
             if not hist.empty:
                 context_dict["price"] = float(hist["Close"].iloc[-1])
                 context_dict["quote_as_of"] = hist.index[-1].strftime("%d %b %Y")
-                context_dict["rsi"] = float(ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1])
-                context_dict["sma_50"] = float(ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1])
+                signal = calculate_stock_signal(hist, context_dict["fundamentals"])
+                context_dict["technical_signal"] = signal
+                rsi_value = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1]
+                sma_value = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1]
+                context_dict["rsi"] = float(rsi_value) if pd.notna(rsi_value) else None
+                context_dict["sma_50"] = float(sma_value) if pd.notna(sma_value) else None
 
             context_dict["pe"] = info.get("trailingPE", "N/A")
             context_dict["roe"] = round((info.get("returnOnEquity") or 0) * 100, 2)
@@ -882,6 +1050,26 @@ def get_live_market_context_for_query(query: str):
                 f"{context_dict['fundamentals']['status']} — "
                 f"{context_dict['fundamentals']['summary']}"
             )
+            signal = context_dict["technical_signal"]
+            if signal:
+                lines.append(
+                    f"- Verified signal engine: swing {signal['swing_action']}; "
+                    f"long-term {signal['long_term_action']}."
+                )
+                lines.append(
+                    "- Engine reasons: " + "; ".join(signal["reasons"])
+                )
+                if signal["swing_entry"] is not None:
+                    lines.append(
+                        f"- ATR-based swing entry / target / stop: "
+                        f"₹{signal['swing_entry']:,.2f} / ₹{signal['swing_target']:,.2f} / "
+                        f"₹{signal['swing_stop']:,.2f}."
+                    )
+                if signal["long_target"] is not None:
+                    lines.append(
+                        f"- ATR-based long-term target / stop: "
+                        f"₹{signal['long_target']:,.2f} / ₹{signal['long_stop']:,.2f}."
+                    )
 
             context_dict["context_text"] = "\n".join(lines)
         except Exception:
@@ -961,11 +1149,12 @@ def stream_chatbot_response(user_query: str):
         You are an Indian Equity Market & Financial Intelligence Analyst for the NSE/BSE.
         Provide a concise, direct, professional answer to the user's latest question.
         Use clean markdown bullet points, bold financial totals in ₹ Crores or %, and clear key support/resistance levels.
-        Check the verified fundamental screen before making any BUY recommendation.
+        Treat the verified signal engine as authoritative for every actionable call.
+        Do not issue BUY unless the selected horizon's engine action is BUY.
+        Do not issue SELL unless the engine says EXIT / AVOID; SELL means exit/avoid an existing position, never short-selling.
         If the user asks for an actionable stock call, end with exactly one line:
-        Signal: BUY, Signal: HOLD, or Signal: SELL.
-        A BUY must include a numeric Target Price higher than the verified entry price.
-        Never report a BUY when the fundamental screen fails or has insufficient data.
+        Signal: BUY, Signal: HOLD, or Signal: SELL. Use the ATR-based engine levels only.
+        Never invent target/stop levels or report BUY when history is insufficient.
         If the user uses pronouns like "it", "this share", or refers back to the prior topic, answer in relation to the active stock.
         If the user switched to a completely different stock, address the new stock immediately.
 
@@ -980,7 +1169,7 @@ def stream_chatbot_response(user_query: str):
         """
         ai_reply = call_gemini_rest_api(prompt, api_key)
         if ai_reply and not ai_reply.startswith("ERROR:"):
-            ai_reply = record_chatbot_buy_if_eligible(ai_reply, context)
+            ai_reply = record_chatbot_buy_if_eligible(ai_reply, context, user_query)
             for word in ai_reply.split(" "):
                 yield word + " "
                 time_module.sleep(0.01)
@@ -989,57 +1178,89 @@ def stream_chatbot_response(user_query: str):
             yield f"⚠️ *(AI API Notice: {ai_reply}. Switching to built-in market analysis engine...)*\n\n"
 
     static_reply = process_universal_chatbot_static(user_query, context)
-    static_reply = record_chatbot_buy_if_eligible(static_reply, context)
+    static_reply = record_chatbot_buy_if_eligible(static_reply, context, user_query)
     for word in static_reply.split(" "):
         yield word + " "
         time_module.sleep(0.015)
 
 
-def record_chatbot_buy_if_eligible(reply: str, context: dict) -> str:
+def record_chatbot_buy_if_eligible(reply: str, context: dict, user_query: str = "") -> str:
     signal_match = re.search(
         r"(?im)^\s*(?:[-*]\s*)?(?:\*\*)?Signal(?:\*\*)?\s*:\s*(BUY|HOLD|SELL)\b",
         reply,
     )
-    if not signal_match or signal_match.group(1).upper() != "BUY":
+    if not signal_match:
+        actionable_query = re.search(
+            r"\b(?:buy|sell|recommend|should i|target|trade)\b",
+            user_query,
+            re.IGNORECASE,
+        )
+        unsupported_action = re.search(r"\b(?:BUY|SELL)\b", reply, re.IGNORECASE)
+        is_confirmed_watchlist = reply.startswith(
+            "### 🎯 Stocks passing the confirmed swing screen"
+        )
+        if actionable_query and unsupported_action and not is_confirmed_watchlist:
+            return (
+                "The response did not include a valid, engine-checked signal, so no "
+                "actionable BUY or SELL is issued. Review the stock's Deep Dive signal "
+                "or provide a specific stock for evaluation.\n\n**Signal: HOLD**"
+            )
+        return reply
+
+    requested_action = signal_match.group(1).upper()
+    signal = context.get("technical_signal") or {}
+    long_term = bool(re.search(r"\blong[\s-]*term\b", user_query, re.IGNORECASE))
+    engine_action = signal.get(
+        "long_term_action" if long_term else "swing_action",
+        "HOLD / WATCH",
+    )
+    if requested_action == "BUY" and engine_action != "BUY":
+        reasons = signal.get("reasons") or ["At least 200 sessions of valid price and volume history are required."]
+        return (
+            "### Verified signal check\n\n"
+            f"The requested BUY is withheld: the {('long-term' if long_term else 'swing')} "
+            f"engine currently says **{engine_action}**.\n\n"
+            + "\n".join(f"- {reason}" for reason in reasons)
+            + "\n\n**Signal: HOLD**"
+        )
+    if requested_action == "SELL" and not signal.get("exit_signal", False):
+        return (
+            "### Verified signal check\n\n"
+            "The engine does not confirm an EXIT / AVOID condition. This tool does not "
+            "recommend short-selling.\n\n**Signal: HOLD**"
+        )
+    if requested_action != "BUY":
+        if requested_action == "SELL":
+            return f"{reply}\n\n**Note:** SELL here means exit/avoid an existing position, not short-selling."
         return reply
 
     ticker = context.get("ticker")
     entry_price = context.get("price")
     fundamentals = context.get("fundamentals") or assess_fundamentals({})
-    if not ticker:
-        return reply
-    if not entry_price or not fundamentals["buy_eligible"]:
-        reason = fundamentals["summary"] if not fundamentals["buy_eligible"] else "No verified stock price is available."
-        reply = re.sub(
-            r"(?im)^(\s*(?:[-*]\s*)?(?:\*\*)?Signal(?:\*\*)?\s*:\s*)BUY\b",
-            r"\1HOLD",
-            reply,
-            count=1,
+    entry_price = signal.get("swing_entry")
+    target_price = signal.get("long_target" if long_term else "swing_target")
+    stop_loss = signal.get("long_stop" if long_term else "swing_stop")
+    if not ticker or entry_price is None or target_price is None or stop_loss is None:
+        return (
+            "### Verified signal check\n\n"
+            "The BUY cannot be recorded because verified price history or ATR-based "
+            "risk levels are unavailable.\n\n**Signal: HOLD**"
         )
-        return f"{reply}\n\n**BUY call withheld:** {reason}"
-
-    target_match = re.search(
-        r"(?im)^.*?target(?:\s+price)?[^\d\n]*₹?\s*([\d,]+(?:\.\d+)?)",
+    reply = re.sub(
+        r"(?im)^.*(?:target(?:\s+price)?|stop[\s-]*loss).*$",
+        "",
         reply,
-    )
-    target_price = (
-        float(target_match.group(1).replace(",", ""))
-        if target_match
-        else round(float(entry_price) * 1.08, 2)
-    )
-    if target_price <= float(entry_price):
-        target_price = round(float(entry_price) * 1.08, 2)
-    stop_loss = round(float(entry_price) * 0.95, 2)
+    ).strip()
     register_buy_calls(
         [
             make_buy_call(
                 ticker,
                 context.get("company") or ticker,
                 "Stock Chatbot",
-                "Chatbot call",
+                "Long-term" if long_term else "Short-term swing",
                 float(entry_price),
-                target_price,
-                stop_loss,
+                float(target_price),
+                float(stop_loss),
                 fundamentals,
                 quote_as_of=context.get("quote_as_of"),
             )
@@ -1047,8 +1268,9 @@ def record_chatbot_buy_if_eligible(reply: str, context: dict) -> str:
     )
     return (
         f"{reply}\n\n"
-        f"**Paper trade snapshot:** ₹{float(entry_price):,.2f} entry | "
-        f"₹{target_price:,.2f} target | ₹{stop_loss:,.2f} stop-loss | "
+        "**Verified engine signal: BUY.**\n"
+        f"**Verified ATR-based paper trade:** ₹{float(entry_price):,.2f} entry | "
+        f"₹{float(target_price):,.2f} target | ₹{float(stop_loss):,.2f} stop-loss | "
         f"₹{VIRTUAL_INVESTMENT:,.0f} virtual investment."
     )
 
@@ -1082,108 +1304,92 @@ def process_universal_chatbot_static(user_query: str, context: dict):
         "TOP SHARES TO BUY", "SUGGEST ME A SHARE", "RECOMMEND A STOCK", "WHAT SHOULD I BUY"
     ]) or (("BEST" in upper or "WHICH" in upper) and "BUY" in upper and len(user_query.split()) <= 10):
 
-        gainers, losers, _ = get_live_market_data(ALL_NSE_STOCKS)
-        low_52w = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+        confirmed_picks = screen_confirmed_buy_picks(ALL_NSE_STOCKS)
         is_open, _, _ = get_market_status()
 
-        resp = "### 🎯 Watchlist candidates based on recent price moves\n\n"
+        resp = "### 🎯 Stocks passing the confirmed swing screen\n\n"
         buy_calls = []
-        candidates = []
-        if not gainers.empty and len(gainers) >= 2:
-            candidates.append(
-                (
-                    gainers.iloc[1]["Stock"],
-                    float(gainers.iloc[1]["Latest Price (₹)"]),
-                    "Short-term momentum",
-                    1.06,
-                    0.97,
-                    "Recent positive price move; daily data does not confirm volume or a breakout.",
-                )
-            )
-
-        if not losers.empty and len(losers) >= 1:
-            candidates.append(
-                (
-                    losers.iloc[0]["Stock"],
-                    float(losers.iloc[0]["Latest Price (₹)"]),
-                    "Short-term rebound",
-                    1.05,
-                    0.96,
-                    "Recent negative price move; a decline alone does not confirm selling exhaustion.",
-                )
-            )
-
-        if not low_52w.empty:
-            v_row = low_52w.iloc[0]
-            candidates.append(
-                (
-                    v_row["Stock"],
-                    float(v_row["Price"]),
-                    "Long-term 52-week value screen",
-                    float(v_row["Long Target"]) / float(v_row["Price"]),
-                    float(v_row["Long SL"]) / float(v_row["Price"]),
-                    f"52-week support and technical screen ({v_row['Technical Setup']}).",
-                )
-            )
-
-        for index, (symbol, entry_price, horizon, target_factor, stop_factor, reason) in enumerate(candidates, 1):
+        for index, (_, row) in enumerate(confirmed_picks.iterrows(), 1):
+            symbol = row["Stock"]
+            entry_price = float(row["Price"])
             fundamentals = get_fundamental_snapshot(f"{symbol}.NS")
-            target_price = round(entry_price * target_factor, 2)
-            stop_loss = round(entry_price * stop_factor, 2)
-            if fundamentals["buy_eligible"]:
-                signal = "BUY"
-                buy_calls.append(
-                    make_buy_call(
-                        f"{symbol}.NS",
-                        symbol,
-                        "Stock Chatbot watchlist",
-                        horizon,
-                        entry_price,
-                        target_price,
-                        stop_loss,
-                        fundamentals,
-                    )
+            target_price = float(row["Short Target"])
+            stop_loss = float(row["Short SL"])
+            buy_calls.append(
+                make_buy_call(
+                    f"{symbol}.NS",
+                    symbol,
+                    "Stock Chatbot confirmed screen",
+                    "Short-term swing",
+                    entry_price,
+                    target_price,
+                    stop_loss,
+                    fundamentals,
                 )
-            else:
-                signal = "HOLD"
+            )
             resp += (
-                f"**{index}. `{symbol}` — {horizon}**\n"
-                f"- **Signal:** {signal}\n"
+                f"**{index}. `{symbol}` — short-term swing**\n"
+                "- **Confirmed setup:** BUY\n"
                 f"- **Entry snapshot / target / stop:** ₹{entry_price:,.2f} / "
                 f"₹{target_price:,.2f} / ₹{stop_loss:,.2f}\n"
-                f"- **Reason:** {reason}\n"
+                f"- **Technical setup:** {row['Technical Setup']}\n"
                 f"- {format_fundamental_assessment(fundamentals)}\n\n"
             )
 
-        if not candidates:
-            resp += "No candidates are available because the latest price data could not be loaded.\n\n"
+        if confirmed_picks.empty:
+            resp += (
+                "No candidate currently passes all trend, breakout, momentum, volume, "
+                "and fundamental checks. Daily movers alone are not buy recommendations.\n\n"
+            )
         timing_note = "Market is open." if is_open else "Market is closed; prices may be from the last completed session."
-        resp += f"> {timing_note} Each eligible BUY uses ₹{VIRTUAL_INVESTMENT:,.0f} of virtual capital."
+        resp += (
+            f"> {timing_note} ATR-based stop and target levels are heuristic estimates, "
+            f"not guarantees. Each eligible BUY uses ₹{VIRTUAL_INVESTMENT:,.0f} of virtual capital."
+        )
         register_buy_calls(buy_calls)
         return resp
 
-    if comp and any(w in upper for w in ["INCREASE", "HIKE", "RISE", "UP", "TARGET", "SHORT PERIOD", "SHORT TERM", "FEW DAYS"]):
+    if comp and any(w in upper for w in [
+        "INCREASE", "HIKE", "RISE", "UP", "DOWN", "FALL", "TARGET",
+        "SHORT PERIOD", "SHORT TERM", "LONG TERM", "BUY", "SELL", "SAFE",
+        "HOLD", "INVEST",
+    ]):
         curr_price = context.get("price") or 0.0
-        rsi = context.get("rsi") or 50.0
-        sma_50 = context.get("sma_50") or curr_price
-        is_bullish = (rsi < 65) and (curr_price >= sma_50)
         fundamentals = context.get("fundamentals") or assess_fundamentals({})
-        is_buy = is_bullish and fundamentals["buy_eligible"]
-        bias = "Bullish / Positive Momentum" if is_bullish else "Consolidation / Pullback Caution"
-        signal = "BUY" if is_buy else "HOLD"
-        target_price = round(curr_price * 1.06, 2)
+        technical_signal = context.get("technical_signal") or {}
+        long_term = bool(re.search(r"\blong[\s-]*term\b", upper))
+        engine_action = technical_signal.get(
+            "long_term_action" if long_term else "swing_action",
+            "HOLD / WATCH",
+        )
+        display_action = "SELL" if engine_action == "EXIT / AVOID" else (
+            "BUY" if engine_action == "BUY" else "HOLD"
+        )
+        target_key = "long_target" if long_term else "swing_target"
+        stop_key = "long_stop" if long_term else "swing_stop"
+        reasons_key = "long_term_reasons" if long_term else "reasons"
+        reasons = technical_signal.get(reasons_key) or [
+            "At least 200 sessions of valid price and volume history are required."
+        ]
+        target_price = technical_signal.get(target_key)
+        stop_loss = technical_signal.get(stop_key)
+        rsi_value = context.get("rsi")
+        sma_50 = context.get("sma_50")
 
         return (
-            f"### Short-Term Outlook for **{comp}** (`{ticker}`)\n\n"
+            f"### {'Long-Term' if long_term else 'Swing'} Outlook for **{comp}** (`{ticker}`)\n\n"
             f"- **Latest available price snapshot:** ₹{curr_price:,.2f}\n"
-            f"- **14-Day RSI:** {rsi:.1f} " + ("*(Overbought)*" if rsi > 70 else "*(Oversold)*" if rsi < 35 else "*(Neutral)*") + "\n"
-            f"- **50-Day Moving Average:** ₹{sma_50:,.2f} (" + ("Price is Above" if curr_price >= sma_50 else "Price is Below") + ")\n\n"
-            f"**Verdict:** **{bias}**\n\n" +
-            (
-                f"Estimated swing target: **₹{target_price:,.2f}**, with stop-loss protection near **₹{curr_price * 0.95:,.2f}**."
-                if is_bullish else
-                f"A sudden sharp hike is less probable over immediate sessions due to moving average resistance or cooling momentum. Wait for consolidation before taking fresh long positions."
-            ) + f"\n\n{format_fundamental_assessment(fundamentals)}\n\n**Signal:** {signal}"
+            f"- **14-Day RSI:** {f'{rsi_value:.1f}' if rsi_value is not None else 'Unavailable'}\n"
+            f"- **50-Day SMA:** {f'₹{sma_50:,.2f}' if sma_50 is not None else 'Unavailable'}\n"
+            f"- **Horizon:** {'Long-term' if long_term else 'Swing'}\n\n"
+            f"**Engine verdict:** **{engine_action}**\n\n"
+            + "\n".join(f"- {reason}" for reason in reasons)
+            + (
+                f"\n\n**ATR-based target / stop:** ₹{target_price:,.2f} / ₹{stop_loss:,.2f}"
+                if display_action == "BUY" and target_price is not None and stop_loss is not None
+                else ""
+            )
+            + f"\n\n{format_fundamental_assessment(fundamentals)}\n\n**Signal: {display_action}**"
         )
 
     if comp and any(w in upper for w in ["SAFE", "LONG TERM", "HOLD", "INVEST", "FUNDAMENTAL"]):
@@ -1197,12 +1403,10 @@ def process_universal_chatbot_static(user_query: str, context: dict):
             f"- **Current Price:** ₹{curr_price:,.2f}\n"
             f"- **Return on Equity (ROE):** {roe}%\n"
             f"- **Trailing P/E Ratio:** {pe}\n\n"
-            f"**Verdict:** Long-term profile is **{health}**.\n\n" +
-            (
-                "Strong capital returns and balance sheet health support staggered long-term accumulation on pullbacks."
-                if roe >= 15.0 else
-                "Return ratios are moderate. Track upcoming quarterly margin sustainability before committing long-term capital."
-            ) + f"\n\n{format_fundamental_assessment(context.get('fundamentals') or assess_fundamentals({}))}"
+            f"**Fundamental profile:** **{health}** based on available ROE data. "
+            "Fundamentals alone do not establish an entry signal; check the technical "
+            "horizon signal before considering a trade.\n\n"
+            f"{format_fundamental_assessment(context.get('fundamentals') or assess_fundamentals({}))}"
         )
 
     if comp:
@@ -1243,11 +1447,17 @@ nav_html = "".join([
 
 st.markdown(f"""
 <div class="pinned-master-bar">
-    <h2>⚡ NSE Mobile Pulse & AI Advisor</h2>
-    <p>Tracking {len(ALL_NSE_STOCKS):,} Equities • Adaptive AI Advisor • Live IPO Hub</p>
-    <div class="nav-tabs-wrapper">
-        {nav_html}
+    <div class="brand-row">
+        <div class="brand-mark">⚡</div>
+        <div class="brand-copy">
+            <h2>NSE Pulse</h2>
+            <p>Market intelligence · IPO insights · virtual tracking</p>
+        </div>
+        <div class="brand-meta"><strong>{len(ALL_NSE_STOCKS):,}</strong> equities tracked</div>
     </div>
+    <nav class="nav-tabs-wrapper" aria-label="Main navigation">
+        {nav_html}
+    </nav>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1276,7 +1486,7 @@ if active_tab == "📊 Market Watch":
             with btn_col:
                 if st.button("🔄 Refresh Data", use_container_width=True):
                     get_live_market_data.clear()
-                    screen_52w_low_strong_picks.clear()
+                    screen_confirmed_buy_picks.clear()
 
         gainers_df, losers_df, last_date = get_live_market_data(ALL_NSE_STOCKS)
 
@@ -1284,76 +1494,12 @@ if active_tab == "📊 Market Watch":
             st.info(f"📅 Showing price data from the last completed exchange session: **{last_date}**")
 
         st.markdown("---")
-        if is_open:
-            st.subheader("⭐ Top 5 Algorithmic Recommendations (Intraday, Short & Long Term)")
-        else:
-            st.subheader("⭐ Top Recommendations for Next Active Session (Short & Long Term)")
-            st.caption("Intraday momentum calls are hidden because the market session is closed.")
-
-        if not gainers_df.empty and not losers_df.empty and len(gainers_df) >= 2 and len(losers_df) >= 3:
-            top_g1 = gainers_df.iloc[0]["Stock"]
-            top_g2 = gainers_df.iloc[1]["Stock"]
-            top_l1 = losers_df.iloc[0]["Stock"]
-            top_l2 = losers_df.iloc[1]["Stock"]
-            top_l3 = losers_df.iloc[2]["Stock"]
-
-            all_picks = []
-            if is_open:
-                all_picks.append({
-                    "Stock": top_g1, "Horizon": "Intraday Momentum", "Action": "BUY ON DIP",
-                    "Price": float(gainers_df.iloc[0]["Latest Price (₹)"]),
-                    "Target %": 6, "Stop %": 3,
-                    "Origin": f"Top Gainer (+{gainers_df.iloc[0]['% Change']}%)",
-                    "Why": "Strong recent price momentum; daily data does not confirm intraday volume or VWAP."
-                })
-
-            all_picks.extend([
-                {"Stock": top_g2, "Price": float(gainers_df.iloc[1]["Latest Price (₹)"]), "Target %": 8, "Stop %": 4, "Horizon": "Short-Term Swing (1–4 Wks)", "Action": "BUY (Momentum)", "Origin": f"Top Gainer ({gainers_df.iloc[1]['% Change']:+.2f}%)", "Why": "Recent price momentum; this screen does not validate volume or resistance breakouts."},
-                {"Stock": top_l1, "Price": float(losers_df.iloc[0]["Latest Price (₹)"]), "Target %": 5, "Stop %": 4, "Horizon": "Short-Term Rebound (1–3 Wks)", "Action": "BUY (Watch for Reversal)", "Origin": f"Top Loser ({losers_df.iloc[0]['% Change']:.2f}%)", "Why": "Price has declined; a decline alone does not confirm selling exhaustion or a reversal."},
-                {"Stock": top_l2, "Price": float(losers_df.iloc[1]["Latest Price (₹)"]), "Target %": 12, "Stop %": 8, "Horizon": "Long-Term Value (6–12 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[1]['% Change']:.2f}%)", "Why": "Price weakness; fundamentals are checked below before any BUY call is recorded."},
-                {"Stock": top_l3, "Price": float(losers_df.iloc[2]["Latest Price (₹)"]), "Target %": 20, "Stop %": 12, "Horizon": "Long-Term Core (12–24 Mos)", "Action": "BUY (Accumulate)", "Origin": f"Top Loser ({losers_df.iloc[2]['% Change']:.2f}%)", "Why": "Price weakness; fundamentals are checked below before any BUY call is recorded."}
-            ])
-
-            buy_calls = []
-            p_cols = st.columns(len(all_picks))
-            for idx, p in enumerate(all_picks):
-                fundamentals = get_fundamental_snapshot(f"{p['Stock']}.NS")
-                entry_price = p["Price"]
-                target_price = round(entry_price * (1 + p["Target %"] / 100), 2)
-                stop_loss = round(entry_price * (1 - p["Stop %"] / 100), 2)
-                eligible = fundamentals["buy_eligible"]
-                if eligible:
-                    buy_calls.append(
-                        make_buy_call(
-                            f"{p['Stock']}.NS",
-                            p["Stock"],
-                            "Market Watch",
-                            p["Horizon"],
-                            entry_price,
-                            target_price,
-                            stop_loss,
-                            fundamentals,
-                            quote_as_of=last_date or None,
-                        )
-                    )
-                with p_cols[idx]:
-                    with st.container(border=True):
-                        st.markdown(f"### {p['Stock']}")
-                        st.caption(p["Origin"])
-                        if eligible:
-                            st.success(f"**{p['Action']}**")
-                        else:
-                            st.warning("**HOLD — BUY blocked by fundamentals**")
-                        st.markdown(f"**Horizon:** {p['Horizon']}")
-                        st.markdown(f"**Why?** {p['Why']}")
-                        st.markdown(f"**Entry snapshot:** ₹{entry_price:,.2f}")
-                        st.markdown(f"**Target / Stop:** ₹{target_price:,.2f} / ₹{stop_loss:,.2f}")
-                        st.caption(format_fundamental_assessment(fundamentals))
-                        if eligible:
-                            st.caption(f"Paper trade: ₹{VIRTUAL_INVESTMENT:,.0f} virtual allocation")
-            register_buy_calls(buy_calls)
-        else:
-            st.info("Not enough daily price history is available to produce market-mover calls.")
+        st.subheader("📈 Daily market movers")
+        st.caption(
+            "Daily gainers and losers are context only—not BUY/SELL signals. "
+            "The confirmed swing screen below requires trend, breakout, momentum, "
+            "volume and fundamental checks."
+        )
 
         st.markdown("---")
         g_col, l_col = st.columns(2)
@@ -1367,10 +1513,15 @@ if active_tab == "📊 Market Watch":
                 st.dataframe(losers_df.style.format({"Latest Price (₹)": "₹{:.2f}", "Change (₹)": "{:.2f}", "% Change": "{:.2f}%"}), use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.subheader("🛡️ Top 3 Value Picks (52W Low Support + Bullish Technical Confirmation)")
-        st.caption("Candidates must be near 52-week support, pass the RSI/EMA/MACD screen, and pass the available-fundamentals check.")
+        st.subheader("🛡️ Confirmed swing BUY setups")
+        st.caption(
+            "A BUY requires price above rising 50- and 200-day averages, a 20-session "
+            "breakout, recent bullish MACD crossover, RSI 50–70, volume at least "
+            "1.2× its prior 20-session average, and passing fundamentals. "
+            "Stops and targets use ATR; this heuristic has not been backtested."
+        )
 
-        low_screener_df = screen_52w_low_strong_picks(ALL_NSE_STOCKS)
+        low_screener_df = screen_confirmed_buy_picks(ALL_NSE_STOCKS)
         if not low_screener_df.empty:
             cols = st.columns(len(low_screener_df))
             value_buy_calls = []
@@ -1381,7 +1532,7 @@ if active_tab == "📊 Market Watch":
                         make_buy_call(
                             f"{row['Stock']}.NS",
                             row["Stock"],
-                            "52-week value screen",
+                            "Confirmed swing screen",
                             "Short-term (1–4 weeks)",
                             float(row["Price"]),
                             float(row["Short Target"]),
@@ -1392,7 +1543,7 @@ if active_tab == "📊 Market Watch":
                         make_buy_call(
                             f"{row['Stock']}.NS",
                             row["Stock"],
-                            "52-week value screen",
+                            "Confirmed swing screen",
                             "Long-term (6–18 months)",
                             float(row["Price"]),
                             float(row["Long Target"]),
@@ -1405,7 +1556,7 @@ if active_tab == "📊 Market Watch":
                 with cols[i]:
                     with st.container(border=True):
                         st.markdown(f"### 💎 {row['Stock']}")
-                        st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% from 52W Low", delta_color="inverse")
+                        st.metric("CMP", f"₹{row['Price']}", delta=f"{row['Dist %']}% above 52W Low")
                         st.write(f"**52W Low:** ₹{row['52W Low']} | **52W High:** ₹{row['52W High']}")
                         st.success(f"**{row['Technical Verdict']}**")
                         st.caption(f"⚡ **Setup:** {row['Technical Setup']}")
@@ -1420,7 +1571,7 @@ if active_tab == "📊 Market Watch":
                         st.write(f"- **Target:** ₹{row['Long Target']}")
             register_buy_calls(value_buy_calls)
         else:
-            st.info("No candidates currently fulfill both the 52-week support threshold AND the bullish technical buy criteria.")
+            st.info("No stocks currently meet every confirmed swing BUY condition.")
 
     render_movers_dashboard()
 
@@ -1677,99 +1828,16 @@ elif active_tab == "🔍 Deep Dive":
                     info = stock.info or {}
                     fundamentals = assess_fundamentals(info)
 
-                    hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
-                    hist["SMA_50"] = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator()
-                    hist["SMA_200"] = ta.trend.SMAIndicator(hist["Close"], window=200).sma_indicator()
-                    macd = ta.trend.MACD(hist["Close"])
-                    hist["MACD"] = macd.macd()
-                    hist["MACD_Signal"] = macd.macd_signal()
-
-                    latest = hist.iloc[-1]
-                    rsi = float(latest["RSI"]) if pd.notna(latest["RSI"]) else 50.0
-                    sma_50 = float(latest["SMA_50"]) if pd.notna(latest["SMA_50"]) else live_price
-                    sma_200 = float(latest["SMA_200"]) if pd.notna(latest["SMA_200"]) else None
-
+                    technical_signal = calculate_stock_signal(hist, fundamentals)
+                    rsi_value = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi().iloc[-1]
+                    sma_value = ta.trend.SMAIndicator(hist["Close"], window=50).sma_indicator().iloc[-1]
+                    rsi = float(rsi_value) if pd.notna(rsi_value) else None
+                    sma_50 = float(sma_value) if pd.notna(sma_value) else None
                     sentiment_score, news_items = fetch_cloud_safe_news(stock, clean_ticker)
-
-                    st_score = 0
-                    st_reasons = []
-
-                    if rsi < 35:
-                        st_score += 1
-                        st_reasons.append(f"RSI is oversold ({rsi:.1f}), signaling technical bounce potential.")
-                    elif rsi > 70:
-                        st_score -= 1
-                        st_reasons.append(f"RSI is overbought ({rsi:.1f}), signaling near-term exhaustion.")
-                    else:
-                        st_reasons.append(f"RSI is neutral ({rsi:.1f}).")
-
-                    if latest["MACD"] > latest["MACD_Signal"]:
-                        st_score += 1
-                        st_reasons.append("Bullish momentum: MACD line holds above signal line.")
-                    else:
-                        st_score -= 1
-                        st_reasons.append("Bearish momentum: MACD line trades below signal line.")
-
-                    if sma_50 and live_price > sma_50:
-                        st_score += 1
-                        st_reasons.append(f"Price is trading above 50-day SMA (₹{sma_50:.2f}).")
-                    elif sma_50:
-                        st_score -= 1
-                        st_reasons.append(f"Price is trading below 50-day SMA (₹{sma_50:.2f}).")
-
-                    if sentiment_score > 0.05:
-                        st_score += 1
-                        st_reasons.append(f"Live news sentiment is positive (+{sentiment_score:.2f}).")
-                    elif sentiment_score < -0.05:
-                        st_score -= 1
-                        st_reasons.append(f"Live news sentiment is cautious ({sentiment_score:.2f}).")
-
-                    st_call = "BUY" if st_score >= 1 else ("SELL" if st_score <= -1 else "HOLD")
-
-                    lt_score = 0
-                    lt_reasons = []
-
-                    roe = info.get("returnOnEquity")
-                    debt_equity = info.get("debtToEquity")
-
-                    if roe and roe > 0.15:
-                        lt_score += 1
-                        lt_reasons.append(f"Strong ROE profile ({roe*100:.1f}%).")
-                    elif roe and roe < 0.08:
-                        lt_score -= 1
-                        lt_reasons.append(f"Subdued capital efficiency: ROE ({roe*100:.1f}%).")
-
-                    if debt_equity is not None and not fundamentals["is_financial_company"]:
-                        if debt_equity < 100:
-                            lt_score += 1
-                            lt_reasons.append("Conservative leverage: Debt-to-Equity is low (< 1.0).")
-                        else:
-                            lt_score -= 1
-                            lt_reasons.append("Elevated debt leverage on balance sheet.")
-                    elif fundamentals["is_financial_company"]:
-                        lt_reasons.append("Debt-to-equity is not used for financial-sector companies.")
-
-                    if sma_200 is not None:
-                        if live_price > sma_200:
-                            lt_score += 1
-                            lt_reasons.append(f"Structural uptrend: Price holds above 200-day SMA (₹{sma_200:.2f}).")
-                        else:
-                            lt_score -= 1
-                            lt_reasons.append(f"Macro downtrend: Price trades below 200-day SMA (₹{sma_200:.2f}).")
-                    else:
-                        lt_reasons.append("200-day SMA unavailable; price trend was not scored.")
-
-                    lt_call = "BUY" if lt_score >= 1 else ("SELL" if lt_score <= -1 else "HOLD")
-                    if st_call == "BUY" and not fundamentals["buy_eligible"]:
-                        st_call = "HOLD"
-                        st_reasons.append(
-                            f"BUY blocked: fundamentals {fundamentals['status'].lower()} — {fundamentals['summary']}."
-                        )
-                    if lt_call == "BUY" and not fundamentals["buy_eligible"]:
-                        lt_call = "HOLD"
-                        lt_reasons.append(
-                            f"BUY blocked: fundamentals {fundamentals['status'].lower()} — {fundamentals['summary']}."
-                        )
+                    st_call = technical_signal["swing_action"]
+                    lt_call = technical_signal["long_term_action"]
+                    st_reasons = technical_signal["reasons"]
+                    lt_reasons = technical_signal["long_term_reasons"]
 
                     st.markdown("---")
                     display_name = info.get("longName") or info.get("shortName") or ticker_symbol
@@ -1786,12 +1854,12 @@ elif active_tab == "🔍 Deep Dive":
                     with r1:
                         st.markdown("#### ⚡ Short-Term Call")
                         if st_call == "BUY": st.success("### ACTION: BUY")
-                        elif st_call == "SELL": st.error("### ACTION: SELL")
-                        else: st.warning("### ACTION: HOLD")
+                        elif st_call == "EXIT / AVOID": st.error("### ACTION: EXIT / AVOID")
+                        else: st.warning("### ACTION: WATCH")
                         for r in st_reasons: st.write(f"- {r}")
                         if st_call == "BUY":
-                            short_target = round(live_price * 1.08, 2)
-                            short_stop = round(live_price * 0.95, 2)
+                            short_target = technical_signal["swing_target"]
+                            short_stop = technical_signal["swing_stop"]
                             st.write(f"- **Target:** ₹{short_target:,.2f} | **Stop-loss:** ₹{short_stop:,.2f}")
                             deep_dive_buy_calls.append(
                                 make_buy_call(
@@ -1810,12 +1878,12 @@ elif active_tab == "🔍 Deep Dive":
                     with r2:
                         st.markdown("#### 🏛️ Long-Term Call")
                         if lt_call == "BUY": st.success("### ACTION: BUY")
-                        elif lt_call == "SELL": st.error("### ACTION: SELL")
-                        else: st.warning("### ACTION: HOLD")
+                        elif lt_call == "EXIT / AVOID": st.error("### ACTION: EXIT / AVOID")
+                        else: st.warning("### ACTION: HOLD / WATCH")
                         for r in lt_reasons: st.write(f"- {r}")
                         if lt_call == "BUY":
-                            long_target = round(live_price * 1.25, 2)
-                            long_stop = round(live_price * 0.90, 2)
+                            long_target = technical_signal["long_target"]
+                            long_stop = technical_signal["long_stop"]
                             st.write(f"- **Target:** ₹{long_target:,.2f} | **Stop-loss:** ₹{long_stop:,.2f}")
                             deep_dive_buy_calls.append(
                                 make_buy_call(
@@ -1834,6 +1902,10 @@ elif active_tab == "🔍 Deep Dive":
 
                     st.markdown("---")
                     st.markdown("#### 📰 Scanned Headlines")
+                    st.caption(
+                        f"News sentiment score: {sentiment_score:+.2f}. "
+                        "This is informational and is not part of the BUY/EXIT trigger."
+                    )
                     if news_items:
                         for n in news_items:
                             badge = "🟢 Positive" if n["score"] > 0.05 else ("🔴 Negative" if n["score"] < -0.05 else "⚪ Neutral")
@@ -1858,10 +1930,8 @@ elif active_tab == "📒 Virtual Portfolio":
     if not bin_id or not master_key:
         st.info("Configure JSONBIN_BIN_ID and JSONBIN_MASTER_KEY to view the shared portfolio.")
     else:
-        refresh_col, _ = st.columns([1, 4])
-        with refresh_col:
-            if st.button("🔄 Refresh portfolio"):
-                get_latest_trade_prices.clear()
+        if st.button("Refresh portfolio", icon=":material/refresh:"):
+            get_latest_trade_prices.clear()
         try:
             trades = fetch_virtual_trades(bin_id, master_key)
         except (requests.RequestException, ValueError, KeyError) as exc:
@@ -1924,16 +1994,22 @@ elif active_tab == "📒 Virtual Portfolio":
 
             if priced_trades:
                 metric_cols = st.columns(3)
-                metric_cols[0].metric("Virtual amount priced", f"₹{total_invested:,.2f}")
+                metric_cols[0].metric(
+                    "Virtual amount priced",
+                    f"₹{total_invested:,.2f}",
+                    border=True,
+                )
                 metric_cols[1].metric(
                     "Latest virtual value",
                     f"₹{total_current_value:,.2f}",
                     delta=f"₹{total_current_value - total_invested:,.2f}",
+                    border=True,
                 )
                 metric_cols[2].metric(
                     "Currently profitable",
                     f"{profitable_trades}/{priced_trades}",
                     delta=f"{profitable_trades / priced_trades:.0%} mark-to-market win rate",
+                    border=True,
                 )
             st.dataframe(
                 pd.DataFrame(portfolio_rows),
@@ -1944,8 +2020,10 @@ elif active_tab == "📒 Virtual Portfolio":
             st.info("No virtual BUY calls have been saved to this JSONBin yet.")
 
 # --- MANDATORY REGULATORY & EDUCATIONAL DISCLAIMER ---
-st.markdown("---")
-st.warning(
-    "⚠️ **Disclaimer:** This tool is purely for educational purposes. "
-    "Please consult with a SEBI-registered advisor before buying or selling any securities."
+st.markdown(
+    '<div class="app-disclaimer"><strong>Educational use only.</strong> '
+    "Signals and IPO screens are informational, not personalized investment advice. "
+    "Verify source data and consult a SEBI-registered advisor before making investment decisions."
+    "</div>",
+    unsafe_allow_html=True,
 )

@@ -10,6 +10,195 @@ from urllib.parse import urljoin
 VIRTUAL_INVESTMENT = 5000.0
 
 
+def evaluate_stock_signal(
+    indicators: dict[str, Any],
+    fundamentals: dict[str, Any],
+) -> dict[str, Any]:
+    price = indicators.get("price")
+    sma_50 = indicators.get("sma_50")
+    sma_200 = indicators.get("sma_200")
+    rsi = indicators.get("rsi")
+    macd_bullish = indicators.get("macd_bullish")
+    macd_bearish = indicators.get("macd_bearish")
+    recent_bullish_cross = indicators.get("recent_bullish_cross")
+    volume_ratio = indicators.get("volume_ratio")
+    breakout = indicators.get("breakout")
+    atr = indicators.get("atr")
+
+    def valid_number(value: Any) -> bool:
+        try:
+            return value is not None and math.isfinite(float(value))
+        except (TypeError, ValueError):
+            return False
+
+    def number_or_none(value: Any) -> float | None:
+        return float(value) if valid_number(value) else None
+
+    price = number_or_none(price)
+    sma_50 = number_or_none(sma_50)
+    sma_200 = number_or_none(sma_200)
+    rsi = number_or_none(rsi)
+    volume_ratio = number_or_none(volume_ratio)
+    atr = number_or_none(atr)
+    if price is not None and price <= 0:
+        price = None
+    if atr is not None and atr <= 0:
+        atr = None
+
+    base_required = {
+        "price": price,
+        "50-day SMA": sma_50,
+        "200-day SMA": sma_200,
+        "ATR": atr,
+    }
+    base_missing = [
+        label for label, value in base_required.items() if not valid_number(value)
+    ]
+    swing_required = {
+        "RSI": rsi,
+    }
+    swing_missing = [
+        label for label, value in swing_required.items() if not valid_number(value)
+    ]
+    if macd_bullish is None or macd_bearish is None or recent_bullish_cross is None:
+        swing_missing.append("MACD history")
+    if volume_ratio is None or not valid_number(volume_ratio):
+        swing_missing.append("volume history")
+    if breakout is None:
+        swing_missing.append("20-day breakout history")
+
+    reasons = []
+    trend_up = (
+        valid_number(price)
+        and valid_number(sma_50)
+        and valid_number(sma_200)
+        and price > sma_50 > sma_200
+    )
+    trend_down = (
+        valid_number(price)
+        and valid_number(sma_50)
+        and valid_number(sma_200)
+        and price < sma_50 < sma_200
+    )
+    momentum_up = macd_bullish is True and recent_bullish_cross is True
+    momentum_down = macd_bearish is True
+    rsi_confirmed = valid_number(rsi) and 50 <= rsi <= 70
+    volume_confirmed = valid_number(volume_ratio) and volume_ratio >= 1.2
+    fundamentals_pass = fundamentals.get("buy_eligible") is True
+    fundamentals_fail = fundamentals.get("status") == "Fail"
+    breakout_confirmed = breakout is True
+    risk_levels_valid = (
+        valid_number(price)
+        and valid_number(atr)
+        and price > 3 * atr
+    )
+
+    if base_missing:
+        reasons.append(f"insufficient price history for: {', '.join(base_missing)}")
+    if swing_missing:
+        reasons.append(f"insufficient swing history for: {', '.join(swing_missing)}")
+    if not trend_up:
+        reasons.append("price is not in an aligned uptrend above the 50- and 200-day averages")
+    if not breakout_confirmed:
+        reasons.append("no confirmed close above the prior 20-session high")
+    if not momentum_up:
+        reasons.append("no recent bullish MACD crossover")
+    if not rsi_confirmed:
+        reasons.append("RSI is outside the 50–70 momentum range")
+    if not volume_confirmed:
+        reasons.append("volume is below 1.2× its prior 20-session average or unavailable")
+    if not fundamentals_pass:
+        reasons.append(
+            f"fundamental screen is {fundamentals.get('status', 'incomplete').lower()}"
+        )
+    if trend_down:
+        reasons.append("price is below both the 50- and 200-day averages")
+    if momentum_down:
+        reasons.append("MACD line is below its signal line")
+    if fundamentals_fail:
+        reasons.append("fundamental screen failed")
+    if valid_number(price) and valid_number(atr) and not risk_levels_valid:
+        reasons.append("ATR is too large relative to price for positive stop-loss levels")
+    if not reasons:
+        reasons.append("all required swing trend, momentum, volume, breakout, and fundamental checks pass")
+
+    long_term_reasons = []
+    if base_missing:
+        long_term_reasons.append(
+            f"insufficient price history for: {', '.join(base_missing)}"
+        )
+    if not trend_up:
+        long_term_reasons.append("price is not in an aligned uptrend above the 50- and 200-day averages")
+    if not fundamentals_pass:
+        long_term_reasons.append(
+            f"fundamental screen is {fundamentals.get('status', 'incomplete').lower()}"
+        )
+    if trend_down:
+        long_term_reasons.append("price is below both the 50- and 200-day averages")
+    if momentum_down:
+        long_term_reasons.append("MACD line is below its signal line")
+    if not long_term_reasons:
+        long_term_reasons.append("price trend and fundamental screen both pass")
+
+    swing_ready = (
+        not base_missing
+        and not swing_missing
+        and risk_levels_valid
+        and trend_up
+        and breakout_confirmed
+        and momentum_up
+        and rsi_confirmed
+        and volume_confirmed
+        and fundamentals_pass
+    )
+    long_term_ready = (
+        not base_missing
+        and risk_levels_valid
+        and trend_up
+        and fundamentals_pass
+    )
+    exit_signal = (
+        not base_missing
+        and trend_down
+        and momentum_down
+        and fundamentals_fail
+    )
+
+    result: dict[str, Any] = {
+        "swing_action": "BUY" if swing_ready else "EXIT / AVOID" if exit_signal else "WATCH",
+        "long_term_action": "BUY" if long_term_ready else "EXIT / AVOID" if exit_signal else "HOLD / WATCH",
+        "reasons": reasons,
+        "long_term_reasons": long_term_reasons,
+        "trend_up": trend_up,
+        "breakout_confirmed": breakout_confirmed,
+        "recent_bullish_cross": momentum_up,
+        "rsi_confirmed": rsi_confirmed,
+        "volume_confirmed": volume_confirmed,
+        "fundamentals_pass": fundamentals_pass,
+        "exit_signal": exit_signal,
+        "swing_entry": None,
+        "swing_target": None,
+        "swing_stop": None,
+        "long_target": None,
+        "long_stop": None,
+        "risk_reward": None,
+    }
+    if risk_levels_valid:
+        swing_stop = round(price - 2 * atr, 2)
+        swing_target = round(price + 3 * atr, 2)
+        result.update(
+            {
+                "swing_entry": round(price, 2),
+                "swing_stop": swing_stop,
+                "swing_target": swing_target,
+                "long_stop": round(price - 3 * atr, 2),
+                "long_target": round(price + 6 * atr, 2),
+                "risk_reward": 1.5,
+            }
+        )
+    return result
+
+
 def parse_ipo_date(date_str: str | None, today: date | None = None) -> date | None:
     if not date_str or date_str.strip().lower() in {
         "-",
