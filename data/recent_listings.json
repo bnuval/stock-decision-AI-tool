@@ -1,6 +1,24 @@
 {
   "listings": [
     {
+      "company": "M. K. Sons Fine Jewels Limited",
+      "date_of_listing": "2026-11-04",
+      "series": "EQ",
+      "symbol": "MKJEWELS"
+    },
+    {
+      "company": "IGL Spirits Limited",
+      "date_of_listing": "2026-11-04",
+      "series": "BE",
+      "symbol": "IGLSPIRITS"
+    },
+    {
+      "company": "Ennature Bio Pharma Limited",
+      "date_of_listing": "2026-11-04",
+      "series": "BE",
+      "symbol": "ENNATURE"
+    },
+    {
       "company": "SFC Environmental Technologies Limited",
       "date_of_listing": "2026-11-03",
       "series": "EQ",
@@ -1355,18 +1373,6 @@
       "date_of_listing": "2026-08-12",
       "series": "EQ",
       "symbol": "ANNAPURNA"
-    },
-    {
-      "company": "MV Electrosystems Limited",
-      "date_of_listing": "2026-08-06",
-      "series": "EQ",
-      "symbol": "MVELECTRO"
-    },
-    {
-      "company": "Juniper Green Energy Limited",
-      "date_of_listing": "2026-08-06",
-      "series": "EQ",
-      "symbol": "JNPR"
     }
   ]
 }
