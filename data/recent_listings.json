@@ -1,6 +1,12 @@
 {
   "listings": [
     {
+      "company": "Bombay Coated and Special Steels Limited",
+      "date_of_listing": "2026-11-05",
+      "series": "BE",
+      "symbol": "BCSSL"
+    },
+    {
       "company": "M. K. Sons Fine Jewels Limited",
       "date_of_listing": "2026-11-04",
       "series": "EQ",
