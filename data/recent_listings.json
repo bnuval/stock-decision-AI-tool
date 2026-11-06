@@ -1,6 +1,18 @@
 {
   "listings": [
     {
+      "company": "Bright Outdoor Media Limited",
+      "date_of_listing": "2026-11-06",
+      "series": "EQ",
+      "symbol": "BRIGHTOUTD"
+    },
+    {
+      "company": "Baheti Recycling Industries Limited",
+      "date_of_listing": "2026-11-06",
+      "series": "EQ",
+      "symbol": "BAHETI"
+    },
+    {
       "company": "Bombay Coated and Special Steels Limited",
       "date_of_listing": "2026-11-05",
       "series": "BE",
@@ -399,7 +411,7 @@
     {
       "company": "Priority Jewels Limited",
       "date_of_listing": "2026-09-04",
-      "series": "EQ",
+      "series": "BE",
       "symbol": "PRIORITY"
     },
     {
@@ -549,7 +561,7 @@
     {
       "company": "Virat Industries Limited",
       "date_of_listing": "2026-08-17",
-      "series": "EQ",
+      "series": "BE",
       "symbol": "VIRAT"
     },
     {
