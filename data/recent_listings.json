@@ -703,6 +703,12 @@
       "symbol": "SRIKPRIND"
     },
     {
+      "company": "SPEL Semiconductor Limited",
+      "date_of_listing": "2026-08-17",
+      "series": "BE",
+      "symbol": "SPELS"
+    },
+    {
       "company": "Simplex Realty Limited",
       "date_of_listing": "2026-08-17",
       "series": "EQ",
@@ -873,7 +879,7 @@
     {
       "company": "Optimus Finance Limited",
       "date_of_listing": "2026-08-17",
-      "series": "EQ",
+      "series": "BE",
       "symbol": "OPTIFIN"
     },
     {
