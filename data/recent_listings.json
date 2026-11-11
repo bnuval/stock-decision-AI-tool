@@ -1,6 +1,12 @@
 {
   "listings": [
     {
+      "company": "Veefin Solutions Limited",
+      "date_of_listing": "2026-11-11",
+      "series": "EQ",
+      "symbol": "VEEFIN"
+    },
+    {
       "company": "Bright Outdoor Media Limited",
       "date_of_listing": "2026-11-06",
       "series": "EQ",
@@ -705,7 +711,7 @@
     {
       "company": "SPEL Semiconductor Limited",
       "date_of_listing": "2026-08-17",
-      "series": "BE",
+      "series": "EQ",
       "symbol": "SPELS"
     },
     {
@@ -1379,12 +1385,6 @@
       "date_of_listing": "2026-08-14",
       "series": "EQ",
       "symbol": "LEAPIND"
-    },
-    {
-      "company": "Swaraj Suiting Limited",
-      "date_of_listing": "2026-08-13",
-      "series": "BE",
-      "symbol": "SWARAJ"
     }
   ]
 }
