@@ -1,6 +1,18 @@
 {
   "listings": [
     {
+      "company": "Suvidhaa Infoserve Limited-RE",
+      "date_of_listing": "2026-11-13",
+      "series": "BE",
+      "symbol": "SUVID-RE"
+    },
+    {
+      "company": "Essen Speciality Films Limited",
+      "date_of_listing": "2026-11-13",
+      "series": "EQ",
+      "symbol": "ESFL"
+    },
+    {
       "company": "Veefin Solutions Limited",
       "date_of_listing": "2026-11-11",
       "series": "EQ",
@@ -987,7 +999,7 @@
     {
       "company": "Makers Laboratories Limited",
       "date_of_listing": "2026-08-17",
-      "series": "EQ",
+      "series": "BE",
       "symbol": "MAKERSL"
     },
     {
