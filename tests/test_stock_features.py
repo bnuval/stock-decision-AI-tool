@@ -340,6 +340,27 @@ class StockSignalTests(unittest.TestCase):
         self.assertEqual(result["long_term_action"], "BUY")
         self.assertEqual(result["swing_action"], "WATCH")
 
+    def test_swing_buy_does_not_require_a_recent_macd_crossover(self):
+        indicators = self.indicators | {"recent_bullish_cross": False}
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "BUY")
+        self.assertFalse(result["recent_bullish_cross"])
+
+    def test_missing_crossover_history_does_not_block_bullish_macd_setup(self):
+        indicators = self.indicators | {"recent_bullish_cross": None}
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "BUY")
+        self.assertFalse(result["recent_bullish_cross"])
+
+    def test_bearish_macd_still_blocks_swing_buy(self):
+        indicators = self.indicators | {
+            "macd_bullish": False,
+            "macd_bearish": True,
+            "recent_bullish_cross": False,
+        }
+        result = evaluate_stock_signal(indicators, self.fundamentals)
+        self.assertEqual(result["swing_action"], "WATCH")
+
     def test_missing_long_history_never_generates_buy(self):
         indicators = self.indicators | {"sma_200": None}
         result = evaluate_stock_signal(indicators, self.fundamentals)

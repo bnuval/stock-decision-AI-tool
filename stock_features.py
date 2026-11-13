@@ -60,8 +60,8 @@ def evaluate_stock_signal(
     swing_missing = [
         label for label, value in swing_required.items() if not valid_number(value)
     ]
-    if macd_bullish is None or macd_bearish is None or recent_bullish_cross is None:
-        swing_missing.append("MACD history")
+    if macd_bullish is None:
+        swing_missing.append("MACD momentum")
     if volume_ratio is None or not valid_number(volume_ratio):
         swing_missing.append("volume history")
     if breakout is None:
@@ -80,7 +80,7 @@ def evaluate_stock_signal(
         and valid_number(sma_200)
         and price < sma_50 < sma_200
     )
-    momentum_up = macd_bullish is True and recent_bullish_cross is True
+    momentum_up = macd_bullish is True
     momentum_down = macd_bearish is True
     rsi_confirmed = valid_number(rsi) and 50 <= rsi <= 70
     volume_confirmed = valid_number(volume_ratio) and volume_ratio >= 1.2
@@ -101,8 +101,8 @@ def evaluate_stock_signal(
         reasons.append("price is not in an aligned uptrend above the 50- and 200-day averages")
     if not breakout_confirmed:
         reasons.append("no confirmed close above the prior 20-session high")
-    if not momentum_up:
-        reasons.append("no recent bullish MACD crossover")
+    if macd_bullish is False or momentum_down:
+        reasons.append("MACD line is below its signal line")
     if not rsi_confirmed:
         reasons.append("RSI is outside the 50–70 momentum range")
     if not volume_confirmed:
@@ -113,8 +113,6 @@ def evaluate_stock_signal(
         )
     if trend_down:
         reasons.append("price is below both the 50- and 200-day averages")
-    if momentum_down:
-        reasons.append("MACD line is below its signal line")
     if fundamentals_fail:
         reasons.append("fundamental screen failed")
     if valid_number(price) and valid_number(atr) and not risk_levels_valid:
@@ -171,7 +169,7 @@ def evaluate_stock_signal(
         "long_term_reasons": long_term_reasons,
         "trend_up": trend_up,
         "breakout_confirmed": breakout_confirmed,
-        "recent_bullish_cross": momentum_up,
+        "recent_bullish_cross": recent_bullish_cross is True,
         "rsi_confirmed": rsi_confirmed,
         "volume_confirmed": volume_confirmed,
         "fundamentals_pass": fundamentals_pass,

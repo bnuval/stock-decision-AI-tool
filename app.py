@@ -578,7 +578,7 @@ def screen_confirmed_buy_picks(universe) -> pd.DataFrame | None:
                 "52W High": round(high_52w, 2),
                 "Dist %": round((current_price - low_52w) / low_52w * 100, 2),
                 "RSI": round(float(ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]), 1),
-                "Technical Setup": "Trend aligned; 20-session breakout, recent MACD cross, RSI and volume confirmed.",
+                "Technical Setup": "Trend aligned; 20-session breakout, bullish MACD, RSI and volume confirmed.",
                 "Technical Verdict": "🟢 Confirmed swing setup",
                 "Fundamental Status": fundamentals["status"],
                 "Fundamental Summary": fundamentals["summary"],
@@ -1547,9 +1547,9 @@ if active_tab == "📊 Market Watch":
         st.subheader("🛡️ Confirmed swing BUY setups")
         st.caption(
             "A BUY requires price above rising 50- and 200-day averages, a 20-session "
-            "breakout, recent bullish MACD crossover, RSI 50–70, volume at least "
-            "1.2× its prior 20-session average, and passing fundamentals. "
-            "Stops and targets use ATR; this heuristic has not been backtested."
+            "breakout, MACD line above its signal line, RSI 50–70, volume at least"
+            " 1.2× its prior 20-session average, and passing fundamentals."
+            " Stops and targets use ATR; this heuristic has not been backtested."
         )
 
         low_screener_df = screen_confirmed_buy_picks(ALL_NSE_STOCKS)
