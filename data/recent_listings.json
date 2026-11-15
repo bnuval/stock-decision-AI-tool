@@ -91,12 +91,6 @@
       "symbol": "BONDADA"
     },
     {
-      "company": "Shivam Autotech Ltd-RE",
-      "date_of_listing": "2026-10-28",
-      "series": "BE",
-      "symbol": "SHIVAM-RE1"
-    },
-    {
       "company": "Paras Healthcare Limited",
       "date_of_listing": "2026-10-28",
       "series": "EQ",
@@ -521,12 +515,6 @@
       "date_of_listing": "2026-08-19",
       "series": "EQ",
       "symbol": "BLEL"
-    },
-    {
-      "company": "Milky Mist Dairy Food Limited",
-      "date_of_listing": "2026-08-18",
-      "series": "BE",
-      "symbol": "MILKYMIST"
     }
   ]
 }
