@@ -1,12 +1,6 @@
 {
   "listings": [
     {
-      "company": "Suvidhaa Infoserve Limited-RE",
-      "date_of_listing": "2026-11-13",
-      "series": "BE",
-      "symbol": "SUVID-RE"
-    },
-    {
       "company": "Essen Speciality Films Limited",
       "date_of_listing": "2026-11-13",
       "series": "EQ",
@@ -503,18 +497,6 @@
       "date_of_listing": "2026-08-24",
       "series": "EQ",
       "symbol": "HORIZONIND"
-    },
-    {
-      "company": "Shiprocket Limited",
-      "date_of_listing": "2026-08-19",
-      "series": "EQ",
-      "symbol": "SHIPROCKET"
-    },
-    {
-      "company": "Behari Lal Engineering Limited",
-      "date_of_listing": "2026-08-19",
-      "series": "EQ",
-      "symbol": "BLEL"
     }
   ]
 }
