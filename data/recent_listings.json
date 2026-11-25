@@ -1,6 +1,18 @@
 {
   "listings": [
     {
+      "company": "Mitsu Chem Plast Limited",
+      "date_of_listing": "2026-11-25",
+      "series": "EQ",
+      "symbol": "MITSU"
+    },
+    {
+      "company": "Blue Cloud Softech Solutions Limited",
+      "date_of_listing": "2026-11-25",
+      "series": "EQ",
+      "symbol": "BLUECLOUDS"
+    },
+    {
       "company": "J.K.Shah Commerce Education Limited",
       "date_of_listing": "2026-11-18",
       "series": "BE",
