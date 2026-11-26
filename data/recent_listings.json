@@ -1,6 +1,18 @@
 {
   "listings": [
     {
+      "company": "Oneclick Logistics India Limited",
+      "date_of_listing": "2026-11-26",
+      "series": "EQ",
+      "symbol": "OLIL"
+    },
+    {
+      "company": "Crystal Crop Protection Limited",
+      "date_of_listing": "2026-11-26",
+      "series": "EQ",
+      "symbol": "CRYSTALCP"
+    },
+    {
       "company": "Mitsu Chem Plast Limited",
       "date_of_listing": "2026-11-25",
       "series": "EQ",
@@ -479,12 +491,6 @@
       "date_of_listing": "2026-08-31",
       "series": "EQ",
       "symbol": "AUGMONT"
-    },
-    {
-      "company": "Tempsens Instruments (India) Limited",
-      "date_of_listing": "2026-08-28",
-      "series": "EQ",
-      "symbol": "TEMPSENS"
     }
   ]
 }
