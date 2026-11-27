@@ -1,6 +1,24 @@
 {
   "listings": [
     {
+      "company": "Praxis Home Retail Limited-RE",
+      "date_of_listing": "2026-11-27",
+      "series": "BE",
+      "symbol": "PRAXIS-RE3"
+    },
+    {
+      "company": "Mahanadi Coalfields Limited",
+      "date_of_listing": "2026-11-27",
+      "series": "EQ",
+      "symbol": "MAHACOAL"
+    },
+    {
+      "company": "HEG Limited",
+      "date_of_listing": "2026-11-27",
+      "series": "BE",
+      "symbol": "HEGRAPHITE"
+    },
+    {
       "company": "Oneclick Logistics India Limited",
       "date_of_listing": "2026-11-26",
       "series": "EQ",
